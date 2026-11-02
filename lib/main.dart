@@ -11,6 +11,19 @@ import 'package:path_provider/path_provider.dart';
 /// 映画棚 - 自分のスマホ内の映画・ドラマファイルを並べる棚アプリ。
 /// 大きな動画ファイルはアプリ内にコピーせず、選んだファイルのパスと情報だけを保存する。
 
+// ---------- 見た目の色(明るい木の棚) ----------
+const Color kCream = Color(0xFFF7EFE3); // 背景の温かいクリーム色
+const Color kCard = Color(0xFFFFFDF8); // カードの温かい白
+const Color kWood = Color(0xFF7A4A21); // アクセントの木の茶色
+const Color kWoodBar = Color(0xFF8D5A33); // AppBarの木の茶色
+const Color kInk = Color(0xFF2B211B); // 本文の濃い茶色
+const Color kSub = Color(0xFF7A6A5F); // 補足テキストの茶灰色
+const Color kContinue = Color(0xFFC62828); // つづきマークの赤
+const Color kContinueBg = Color(0xFFFDECEA); // つづきマークの薄い赤背景
+const Color kEpisode = Color(0xFF9C6B00); // 話数表示の濃い琥珀色
+const Color kStar = Color(0xFFF2A007); // 星の色
+const Color kWatched = Color(0xFF2E7D32); // 「観た」の緑
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
@@ -23,7 +36,23 @@ class EigadanaApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
         title: '映画棚',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData.dark(useMaterial3: true),
+        theme: ThemeData(
+          useMaterial3: true,
+          brightness: Brightness.light,
+          scaffoldBackgroundColor: kCream,
+          colorScheme: ColorScheme.fromSeed(seedColor: kWood, brightness: Brightness.light).copyWith(
+            primary: kWood,
+            onPrimary: Colors.white,
+            secondary: kWoodBar,
+            surface: kCream,
+            onSurface: kInk,
+          ),
+          appBarTheme: const AppBarTheme(backgroundColor: kWoodBar, foregroundColor: Colors.white),
+          snackBarTheme: const SnackBarThemeData(
+            backgroundColor: kInk,
+            contentTextStyle: TextStyle(color: Colors.white),
+          ),
+        ),
         home: const HomePage(),
       );
 }
@@ -377,6 +406,7 @@ class _HomePageState extends State<HomePage> {
     }
     final cont = AppData.I.continueWork(shelfId);
     return Card(
+      color: kCard,
       child: InkWell(
         onTap: () => _openShelf(shelfId, name),
         child: Padding(
@@ -411,7 +441,7 @@ class _HomePageState extends State<HomePage> {
                     list.take(3).map((w) => w.title).join('、'),
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Colors.white70),
+                    style: const TextStyle(color: kSub),
                   ),
                 ),
               if (cont != null) ...[
@@ -419,7 +449,7 @@ class _HomePageState extends State<HomePage> {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: FilledButton.tonal(
-                    style: FilledButton.styleFrom(foregroundColor: Colors.redAccent),
+                    style: FilledButton.styleFrom(foregroundColor: kContinue, backgroundColor: kContinueBg),
                     onPressed: () => _openWork(cont),
                     child: Text('▶ つづき${cont.episode != null ? ':第${cont.episode}話' : ':${cont.title}'}'),
                   ),
@@ -478,6 +508,8 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: kWood,
+        foregroundColor: Colors.white,
         onPressed: _newShelf,
         icon: const Icon(Icons.add),
         label: const Text('新しい棚の箱を作る'),
@@ -490,7 +522,7 @@ class _HomePageState extends State<HomePage> {
             onChanged: (v) => setState(() => _query = v),
           ),
           const SizedBox(height: 8),
-          Text('作品は全部で${d.works.length}本・棚は${d.shelves.length}箱', style: const TextStyle(color: Colors.white70)),
+          Text('作品は全部で${d.works.length}本・棚は${d.shelves.length}箱', style: const TextStyle(color: kSub)),
           const SizedBox(height: 10),
           if (_query.trim().isNotEmpty) ...[
             Text('検索結果: ${searchResults.length}件'),
@@ -500,7 +532,7 @@ class _HomePageState extends State<HomePage> {
                 leading: const Icon(Icons.movie),
                 title: Text(w.title),
                 subtitle: Text('${w.episode != null ? '第${w.episode}話・' : ''}${w.fileName}'),
-                trailing: w.isInProgress ? const Text('▶ つづき', style: TextStyle(color: Colors.redAccent)) : null,
+                trailing: w.isInProgress ? const Text('▶ つづき', style: TextStyle(color: kContinue)) : null,
                 onTap: () => _openWork(w),
               ),
             if (searchResults.isEmpty) const Text('見つかりませんでした'),
@@ -559,7 +591,7 @@ class _ShelfPageState extends State<ShelfPage> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(f.name, style: const TextStyle(color: Colors.white70)),
+            Text(f.name, style: const TextStyle(color: kSub)),
             TextField(controller: titleCtl, decoration: const InputDecoration(labelText: 'タイトル')),
             TextField(controller: epCtl, decoration: const InputDecoration(labelText: '話数(空でも可)'), keyboardType: TextInputType.number),
           ],
@@ -629,6 +661,7 @@ class _ShelfPageState extends State<ShelfPage> {
 
   Widget _workCard(Work w) {
     return Card(
+      color: kCard,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () => _openWork(w),
@@ -637,23 +670,24 @@ class _ShelfPageState extends State<ShelfPage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.movie, size: 40, color: Colors.white70),
+              const Icon(Icons.movie, size: 40, color: kSub),
               const SizedBox(height: 6),
               if (w.episode != null)
-                Text('第${w.episode}話', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)),
+                Text('第${w.episode}話', style: const TextStyle(color: kEpisode, fontWeight: FontWeight.bold)),
               Text(w.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
-              Text(fmtSize(w.fileSizeBytes), style: const TextStyle(color: Colors.white60, fontSize: 12)),
-              if (w.watched) const Text('観た', style: TextStyle(color: Colors.greenAccent, fontSize: 12)),
+              Text(fmtSize(w.fileSizeBytes), style: const TextStyle(color: kSub, fontSize: 12)),
+              if (w.watched) const Text('観た', style: TextStyle(color: kWatched, fontSize: 12)),
               if (w.isInProgress) ...[
                 const SizedBox(height: 4),
-                const Text('▶ つづき', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold, fontSize: 13)),
+                const Text('▶ つづき', style: TextStyle(color: kContinue, fontWeight: FontWeight.bold, fontSize: 13)),
                 const SizedBox(height: 2),
                 LinearProgressIndicator(
                   value: w.durationSeconds > 0 ? w.positionSeconds / w.durationSeconds : 0,
-                  color: Colors.redAccent,
+                  color: kContinue,
+                  backgroundColor: kContinueBg,
                 ),
                 Text('つづき ${fmtTime(w.positionSeconds)} / ${fmtTime(w.durationSeconds)}・残り約${fmtTime(w.durationSeconds - w.positionSeconds)}',
-                    style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                    style: const TextStyle(color: kSub, fontSize: 11)),
               ],
             ],
           ),
@@ -672,6 +706,7 @@ class _ShelfPageState extends State<ShelfPage> {
         actions: [
           if (list.length > 1)
             TextButton(
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
               onPressed: () => setState(() => _reorder = !_reorder),
               child: Text(_reorder ? '完了' : '並び替え'),
             ),
@@ -683,11 +718,11 @@ class _ShelfPageState extends State<ShelfPage> {
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Row(
               children: [
-                Text('全${list.length}本', style: const TextStyle(color: Colors.white70)),
+                Text('全${list.length}本', style: const TextStyle(color: kSub)),
                 if (cont != null) ...[
                   const SizedBox(width: 12),
                   FilledButton.tonal(
-                    style: FilledButton.styleFrom(foregroundColor: Colors.redAccent),
+                    style: FilledButton.styleFrom(foregroundColor: kContinue, backgroundColor: kContinueBg),
                     onPressed: () => _openWork(cont),
                     child: Text('▶ つづき${cont.episode != null ? ':第${cont.episode}話' : ''}'),
                   ),
@@ -882,7 +917,7 @@ class _PlayerPageState extends State<PlayerPage> {
                     const Text('評価: '),
                     for (var i = 1; i <= 5; i++)
                       IconButton(
-                        icon: Icon(i <= rating ? Icons.star : Icons.star_border, color: Colors.amber),
+                        icon: Icon(i <= rating ? Icons.star : Icons.star_border, color: kStar),
                         onPressed: () => setLocal(() => rating = i == rating ? 0 : i),
                       ),
                   ],
@@ -960,13 +995,13 @@ class _PlayerPageState extends State<PlayerPage> {
             Padding(
               padding: const EdgeInsets.all(14),
               child: Card(
-                color: Colors.red.shade900,
+                color: kContinueBg,
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('再生できません', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const Text('再生できません', style: TextStyle(fontWeight: FontWeight.bold, color: kContinue)),
                       const SizedBox(height: 4),
                       Text(_error!),
                       const SizedBox(height: 8),
@@ -982,19 +1017,19 @@ class _PlayerPageState extends State<PlayerPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 if (w.episode != null)
-                  Text('第${w.episode}話', style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 16)),
+                  Text('第${w.episode}話', style: const TextStyle(color: kEpisode, fontWeight: FontWeight.bold, fontSize: 16)),
                 Text(w.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                 const SizedBox(height: 6),
-                Text('${w.fileName}\n${fmtSize(w.fileSizeBytes)}', style: const TextStyle(color: Colors.white70)),
+                Text('${w.fileName}\n${fmtSize(w.fileSizeBytes)}', style: const TextStyle(color: kSub)),
                 if (w.durationSeconds > 0) ...[
                   const SizedBox(height: 8),
-                  if (w.isInProgress) const Text('▶ つづき', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-                  LinearProgressIndicator(value: w.positionSeconds / w.durationSeconds, color: Colors.redAccent),
+                  if (w.isInProgress) const Text('▶ つづき', style: TextStyle(color: kContinue, fontWeight: FontWeight.bold)),
+                  LinearProgressIndicator(value: w.positionSeconds / w.durationSeconds, color: kContinue, backgroundColor: kContinueBg),
                   Text('${fmtTime(w.positionSeconds)} / ${fmtTime(w.durationSeconds)}'),
                 ],
                 if (w.rating > 0)
-                  Row(children: [for (var i = 1; i <= w.rating; i++) const Icon(Icons.star, color: Colors.amber, size: 20)]),
-                if (w.watched) const Text('観た', style: TextStyle(color: Colors.greenAccent)),
+                  Row(children: [for (var i = 1; i <= w.rating; i++) const Icon(Icons.star, color: kStar, size: 20)]),
+                if (w.watched) const Text('観た', style: TextStyle(color: kWatched)),
                 if (w.memo.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6), child: Text(w.memo)),
                 const SizedBox(height: 16),
                 Wrap(
