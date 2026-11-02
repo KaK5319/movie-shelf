@@ -15,5 +15,11 @@ dependencies:
   media_kit_video: ^1.2.5
   media_kit_libs_android_video: ^1.3.6
 
+# Androidのビルドエラー対策: lifecycleプラグインを古い版に固定(compileSdk 34で動く版)
+# 新しい版は compileSdk 36 を要求し、file_picker(34) とぶつかって
+# :file_picker:checkDebugAarMetadata で落ちるため。sturdy-spoon と同じ対策。
+dependency_overrides:
+  flutter_plugin_android_lifecycle: 2.0.24
+
 flutter:
   uses-material-design: true
