@@ -1,0 +1,19 @@
+name: movie_shelf
+description: 映画棚 - 自分のスマホ内の映画・ドラマファイルを並べる棚アプリ
+publish_to: none
+version: 1.0.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  file_picker: ^8.1.2
+  path_provider: ^2.1.4
+  media_kit: ^1.1.11
+  media_kit_video: ^1.2.5
+  media_kit_libs_android_video: ^1.3.6
+
+flutter:
+  uses-material-design: true
