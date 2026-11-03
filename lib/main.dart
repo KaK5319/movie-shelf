@@ -81,6 +81,7 @@ class Work {
     this.watched = false,
     this.rating = 0,
     this.memo = '',
+    this.posterPath,
     this.sortOrder = 0,
   });
   final String id;
@@ -95,7 +96,19 @@ class Work {
   bool watched;
   int rating; // 0-5
   String memo;
+  String? posterPath; // アプリ内にコピーしたポスター画像のパス(未設定ならnull)
   int sortOrder;
+
+  /// ポスター画像ファイルが実際に存在するか(無い・消えた場合は色タイルに戻す)
+  bool posterFileExists() {
+    final p = posterPath;
+    if (p == null || p.isEmpty) return false;
+    try {
+      return File(p).existsSync();
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// 最後まで観たとみなす位置か(残り5%以下、または残り90秒以下)
   bool get isAtEnd {
@@ -121,6 +134,7 @@ class Work {
         'watched': watched,
         'rating': rating,
         'memo': memo,
+        'posterPath': posterPath,
         'sortOrder': sortOrder,
       };
   factory Work.fromJson(Map<String, dynamic> j) => Work(
@@ -136,6 +150,7 @@ class Work {
         watched: (j['watched'] ?? false) as bool,
         rating: (j['rating'] ?? 0) as int,
         memo: (j['memo'] ?? '') as String,
+        posterPath: j['posterPath'] as String?,
         sortOrder: (j['sortOrder'] ?? 0) as int,
       );
 }
@@ -301,6 +316,83 @@ String fmtTime(int sec) {
 }
 
 const videoExtensions = ['mp4', 'mkv', 'mov', 'avi', 'webm', 'm4v', '3gp', 'wmv', 'flv', 'ts'];
+
+// ---------- ポスター画像 ----------
+// ポスターは小さい画像なので、動画と違ってアプリ内にコピーして持つ。
+// コピー先: アプリ専用フォルダ/posters/<作品ID>.<拡張子>
+const posterExtensions = ['jpg', 'jpeg', 'png', 'webp'];
+
+/// ポスター画像を選ばせる。選ばれた元のファイルのパスを返す(やめたらnull)
+Future<String?> pickPosterImagePath() async {
+  final r = await FilePicker.platform.pickFiles(type: FileType.custom, allowedExtensions: posterExtensions);
+  return r?.files.single.path;
+}
+
+/// 選んだポスター画像をアプリ内(posters/<作品ID>.<拡張子>)にコピーし、そのパスを返す。
+/// 先に新しい方をコピーしてから、別拡張子の古いポスターを消す(差し替え対応)。
+/// 失敗したらnull(呼び出し側は今のポスターのままにする)。
+Future<String?> copyPosterForWork(String sourcePath, String workId) async {
+  try {
+    final src = File(sourcePath);
+    if (!await src.exists()) return null;
+    final dir = await getApplicationDocumentsDirectory();
+    final postersDir = Directory('${dir.path}/posters');
+    if (!await postersDir.exists()) await postersDir.create(recursive: true);
+    var ext = sourcePath.split('.').last.toLowerCase();
+    if (!posterExtensions.contains(ext)) ext = 'jpg';
+    final target = File('${postersDir.path}/$workId.$ext');
+    if (src.path != target.path) await src.copy(target.path);
+    // 同じ作品の別拡張子の古いポスターを消す
+    await for (final e in postersDir.list()) {
+      if (e is File && e.path != target.path && e.path.split('/').last.startsWith('$workId.')) {
+        try {
+          await e.delete();
+        } catch (_) {}
+      }
+    }
+    return target.path;
+  } catch (_) {
+    return null;
+  }
+}
+
+/// コピー済みポスターを消す(ベストエフォート。失敗しても無視する)
+Future<void> deletePosterFile(String? posterPath) async {
+  if (posterPath == null || posterPath.isEmpty) return;
+  try {
+    final f = File(posterPath);
+    if (await f.exists()) await f.delete();
+  } catch (_) {}
+}
+
+/// 編集・追加ダイアログ内のポスター欄。
+/// ボタンは縦並び(横幅いっぱい)にして、横はみ出しが起きないようにする。
+Widget posterPickerSection({required String? previewPath, required VoidCallback onPick, required VoidCallback? onRemove}) {
+  final showPreview = previewPath != null && previewPath.isNotEmpty && File(previewPath).existsSync();
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      const SizedBox(height: 10),
+      const Align(alignment: Alignment.centerLeft, child: Text('ポスター', style: TextStyle(color: kSub))),
+      const SizedBox(height: 6),
+      if (showPreview) ...[
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.file(
+            File(previewPath!),
+            height: 120,
+            width: double.infinity,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+          ),
+        ),
+        const SizedBox(height: 6),
+      ],
+      OutlinedButton.icon(onPressed: onPick, icon: const Icon(Icons.image), label: const Text('ポスター画像を選ぶ')),
+      if (onRemove != null) TextButton.icon(onPressed: onRemove, icon: const Icon(Icons.close), label: const Text('ポスターを外す')),
+    ],
+  );
+}
 
 // ---------- ホーム(棚の箱一覧) ----------
 
@@ -626,26 +718,46 @@ class _ShelfPageState extends State<ShelfPage> {
     if (f == null) return;
     final titleCtl = TextEditingController(text: f.name.replaceAll(RegExp(r'\.[^.]+$'), ''));
     final epCtl = TextEditingController();
+    String? pickedPoster; // 選んだポスター画像の元のパス(「加える」時にアプリ内へコピーする)
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('作品を加える'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(f.name, style: const TextStyle(color: kSub)),
-            TextField(controller: titleCtl, decoration: const InputDecoration(labelText: 'タイトル')),
-            TextField(controller: epCtl, decoration: const InputDecoration(labelText: '話数(空でも可)'), keyboardType: TextInputType.number),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: const Text('作品を加える'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(f.name, style: const TextStyle(color: kSub)),
+                TextField(controller: titleCtl, decoration: const InputDecoration(labelText: 'タイトル')),
+                TextField(controller: epCtl, decoration: const InputDecoration(labelText: '話数(空でも可)'), keyboardType: TextInputType.number),
+                posterPickerSection(
+                  previewPath: pickedPoster,
+                  onPick: () async {
+                    final p = await pickPosterImagePath();
+                    if (p == null) return;
+                    try {
+                      setLocal(() => pickedPoster = p);
+                    } catch (_) {}
+                  },
+                  onRemove: pickedPoster == null ? null : () => setLocal(() => pickedPoster = null),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('やめる')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('加える')),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('やめる')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('加える')),
-        ],
       ),
     );
     if (ok != true) return;
-    AppData.I.works.add(_workFromFile(f, titleCtl.text.trim().isEmpty ? f.name : titleCtl.text.trim(), int.tryParse(epCtl.text)));
+    final work = _workFromFile(f, titleCtl.text.trim().isEmpty ? f.name : titleCtl.text.trim(), int.tryParse(epCtl.text));
+    if (pickedPoster != null) {
+      work.posterPath = await copyPosterForWork(pickedPoster!, work.id);
+    }
+    AppData.I.works.add(work);
     await AppData.I.save();
     setState(() {});
   }
@@ -713,18 +825,63 @@ class _ShelfPageState extends State<ShelfPage> {
           children: [
             // 色付きポスター風タイル(Web版の棚と同じ見た目)。
             // 高さはExpandedで残り全部を受けるので、セルより高くなることはない。
-            // タイトルは白・太字で中央、左上に話数バッジ、右下に再生マーク。
+            // ポスター画像がある作品はタイル全体に画像を敷き、題名は下部の
+            // 暗いグラデーション帯に白・太字で重ねる。ポスターが無い・読めない
+            // 作品は今まで通りの色タイル(題名は中央)。
+            // 左上に話数バッジ、右下に再生マーク。
             Expanded(
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
-                    colors: [kTilePalette[tileIdx], kTilePaletteDark[tileIdx]],
-                  ),
-                ),
-                child: Stack(
-                  children: [
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  if (w.posterFileExists())
+                    Image.file(
+                      File(w.posterPath!),
+                      fit: BoxFit.cover,
+                      // 読めなかったら色タイルの地だけ出す(下の題名帯と合わせて表示する)
+                      errorBuilder: (_, __, ___) => Container(
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [kTilePalette[tileIdx], kTilePaletteDark[tileIdx]],
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [kTilePalette[tileIdx], kTilePaletteDark[tileIdx]],
+                        ),
+                      ),
+                    ),
+                  if (w.posterFileExists())
+                    // ポスター時の題名帯。右下の再生マークと重ならないよう右に余白を取る
+                    Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: 0,
+                      child: Container(
+                        padding: const EdgeInsets.fromLTRB(8, 16, 34, 6),
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            begin: Alignment.topCenter,
+                            end: Alignment.bottomCenter,
+                            colors: [Color(0x00000000), Color(0xCC000000)],
+                          ),
+                        ),
+                        child: Text(
+                          w.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12, height: 1.25),
+                        ),
+                      ),
+                    )
+                  else
                     Center(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -737,28 +894,27 @@ class _ShelfPageState extends State<ShelfPage> {
                         ),
                       ),
                     ),
-                    if (w.episode != null)
-                      Positioned(
-                        left: 6,
-                        top: 6,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(color: const Color(0x73000000), borderRadius: BorderRadius.circular(8)),
-                          child: Text('第${w.episode}話', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                        ),
-                      ),
+                  if (w.episode != null)
                     Positioned(
-                      right: 6,
-                      bottom: 6,
+                      left: 6,
+                      top: 6,
                       child: Container(
-                        width: 26,
-                        height: 26,
-                        decoration: const BoxDecoration(color: Color(0x73000000), shape: BoxShape.circle),
-                        child: const Icon(Icons.play_arrow, color: Colors.white, size: 16),
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(color: const Color(0x73000000), borderRadius: BorderRadius.circular(8)),
+                        child: Text('第${w.episode}話', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
                       ),
                     ),
-                  ],
-                ),
+                  Positioned(
+                    right: 6,
+                    bottom: 6,
+                    child: Container(
+                      width: 26,
+                      height: 26,
+                      decoration: const BoxDecoration(color: Color(0x73000000), shape: BoxShape.circle),
+                      child: const Icon(Icons.play_arrow, color: Colors.white, size: 16),
+                    ),
+                  ),
+                ],
               ),
             ),
             // タイルの下の情報エリア。どのカードでも同じ高さ(88)にそろえ、
@@ -1020,6 +1176,9 @@ class _PlayerPageState extends State<PlayerPage> {
     var rating = w.rating;
     var watched = w.watched;
     var shelfId = w.shelfId;
+    var posterPreview = w.posterPath; // プレビューに出す画像(既存ポスター or 新しく選んだ画像)
+    String? pickedPoster; // 新しく選んだ画像の元のパス(保存時にアプリ内へコピーする)
+    var posterRemoved = false;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -1082,6 +1241,27 @@ class _PlayerPageState extends State<PlayerPage> {
                   onChanged: (v) => setLocal(() => watched = v),
                 ),
                 TextField(controller: memoCtl, decoration: const InputDecoration(labelText: 'メモ'), maxLines: 2),
+                posterPickerSection(
+                  previewPath: posterPreview,
+                  onPick: () async {
+                    final p = await pickPosterImagePath();
+                    if (p == null) return;
+                    try {
+                      setLocal(() {
+                        pickedPoster = p;
+                        posterPreview = p;
+                        posterRemoved = false;
+                      });
+                    } catch (_) {}
+                  },
+                  onRemove: posterPreview == null
+                      ? null
+                      : () => setLocal(() {
+                            pickedPoster = null;
+                            posterPreview = null;
+                            posterRemoved = true;
+                          }),
+                ),
               ],
             ),
           ),
@@ -1093,6 +1273,15 @@ class _PlayerPageState extends State<PlayerPage> {
       ),
     );
     if (ok != true) return;
+    // ポスター: 新しく選んだ画像はアプリ内にコピーしてからパスを差し替える。
+    // 外した場合はコピー済みファイルも消す。コピーに失敗したら今のポスターのまま。
+    if (pickedPoster != null) {
+      final copied = await copyPosterForWork(pickedPoster!, w.id);
+      if (copied != null) w.posterPath = copied;
+    } else if (posterRemoved) {
+      await deletePosterFile(w.posterPath);
+      w.posterPath = null;
+    }
     final shelfChanged = shelfId != w.shelfId;
     w.title = titleCtl.text.trim().isEmpty ? w.title : titleCtl.text.trim();
     w.episode = int.tryParse(epCtl.text);
@@ -1120,6 +1309,7 @@ class _PlayerPageState extends State<PlayerPage> {
     );
     if (ok != true) return;
     AppData.I.works.removeWhere((x) => x.id == w.id);
+    await deletePosterFile(w.posterPath); // コピー済みポスターも一緒に消す(動画本体は消えない)
     await AppData.I.save();
     if (mounted) Navigator.pop(context);
   }
@@ -1170,6 +1360,19 @@ class _PlayerPageState extends State<PlayerPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (w.posterFileExists()) ...[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: Image.file(
+                      File(w.posterPath!),
+                      height: 200,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 if (w.episode != null)
                   Text('第${w.episode}話', style: const TextStyle(color: kEpisode, fontWeight: FontWeight.bold, fontSize: 16)),
                 Text(w.title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
