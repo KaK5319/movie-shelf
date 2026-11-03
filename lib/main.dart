@@ -761,23 +761,24 @@ class _ShelfPageState extends State<ShelfPage> {
                 ),
               ),
             ),
-            // タイルの下の情報エリア。どのカードでも同じ高さ(76)にそろえ、
+            // タイルの下の情報エリア。どのカードでも同じ高さ(88)にそろえ、
             // ポスターの高さがカードごとに揃うようにする。
-            // 中身の最大量(サイズ+つづき一式で約62)より広く取ってあり、
+            // 中身の最大量(サイズ+つづき一式)は実機で76だと1pxはみ出したため、
+            // 88まで広げ、内側の余白と間隔も少し詰めて余裕を持たせてある。
             // 残りの高さはタイル側が受けるので、縦はみ出しは起きない。
             SizedBox(
-              height: 76,
+              height: 88,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+                padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(fmtSize(w.fileSizeBytes), style: const TextStyle(color: kSub, fontSize: 12)),
                     if (w.watched) const Text('観た', style: TextStyle(color: kWatched, fontSize: 12)),
                     if (w.isInProgress) ...[
-                      const SizedBox(height: 3),
-                      const Text('▶ つづき', style: TextStyle(color: kContinue, fontWeight: FontWeight.bold, fontSize: 12)),
                       const SizedBox(height: 2),
+                      const Text('▶ つづき', style: TextStyle(color: kContinue, fontWeight: FontWeight.bold, fontSize: 12)),
+                      const SizedBox(height: 1),
                       SizedBox(
                         height: 4,
                         child: LinearProgressIndicator(
@@ -786,7 +787,7 @@ class _ShelfPageState extends State<ShelfPage> {
                           backgroundColor: kContinueBg,
                         ),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 1),
                       // 詳細(経過/残り)は狭いセルで何行にも折り返すと縦に溢れるので1行に制限する
                       Text('つづき ${fmtTime(w.positionSeconds)} / ${fmtTime(w.durationSeconds)}・残り約${fmtTime(w.durationSeconds - w.positionSeconds)}',
                           maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kSub, fontSize: 10)),
@@ -893,9 +894,9 @@ class _ShelfPageState extends State<ShelfPage> {
                         padding: const EdgeInsets.all(12),
                         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: MediaQuery.of(context).size.width > 900 ? 5 : (MediaQuery.of(context).size.width > 600 ? 4 : 3),
-                          // カード内(色タイル+下の情報エリア76)が収まるよう、
-                          // 以前(0.72)よりセルを縦長にする。タイルはExpandedで残り高さに収める。
-                          childAspectRatio: 0.60,
+                          // カード内(色タイル+下の情報エリア88)が収まるよう、
+                          // セルを縦長にする。タイルはExpandedで残り高さに収める。
+                          childAspectRatio: 0.55,
                           crossAxisSpacing: 10,
                           mainAxisSpacing: 10,
                         ),
@@ -1042,11 +1043,37 @@ class _PlayerPageState extends State<PlayerPage> {
                 Row(
                   children: [
                     const Text('評価: '),
-                    for (var i = 1; i <= 5; i++)
-                      IconButton(
-                        icon: Icon(i <= rating ? Icons.star : Icons.star_border, color: kStar),
-                        onPressed: () => setLocal(() => rating = i == rating ? 0 : i),
+                    // 星ボタンは既定の48dpだと5個で横にはみ出すため、40dpに詰める。
+                    // それでも収まらない狭さの場合はFittedBoxで縮めて保険をかける
+                    //(通常の幅では等倍のまま)。
+                    Flexible(
+                      child: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        alignment: Alignment.centerLeft,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (var i = 1; i <= 5; i++)
+                              SizedBox(
+                                width: 40,
+                                height: 40,
+                                child: IconButton(
+                                  padding: EdgeInsets.zero,
+                                  iconSize: 26,
+                                  style: IconButton.styleFrom(
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    minimumSize: const Size(40, 40),
+                                    maximumSize: const Size(40, 40),
+                                    padding: EdgeInsets.zero,
+                                  ),
+                                  icon: Icon(i <= rating ? Icons.star : Icons.star_border, color: kStar),
+                                  onPressed: () => setLocal(() => rating = i == rating ? 0 : i),
+                                ),
+                              ),
+                          ],
+                        ),
                       ),
+                    ),
                   ],
                 ),
                 SwitchListTile(
