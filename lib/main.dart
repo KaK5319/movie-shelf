@@ -140,6 +140,48 @@ class Work {
       );
 }
 
+// ---------- 作品タイルの色 ----------
+// Web版の棚と同じく、作品ごとに濃い「ポスター色」を付けるためのパレット。
+// 保存データは変えず、タイトルと話数から毎回同じ色を導くので、
+// 同じ作品はいつ開いても同じ色になる。
+const List<Color> kTilePalette = [
+  Color(0xFF2E5E43), // 深い緑
+  Color(0xFF5B2A6E), // 紫
+  Color(0xFF6B4226), // 茶
+  Color(0xFF20545A), // 青緑(ティール)
+  Color(0xFF8A3B12), // 錆色(ラスト)
+  Color(0xFF26306E), // 紺
+  Color(0xFF5E2144), // ワイン
+  Color(0xFF1F4634), // 濃い緑
+];
+
+// グラデーションの下側(同じ色相の少し暗い色)
+const List<Color> kTilePaletteDark = [
+  Color(0xFF1E4030),
+  Color(0xFF3E1C4B),
+  Color(0xFF472C17),
+  Color(0xFF143A3F),
+  Color(0xFF5F280B),
+  Color(0xFF181F49),
+  Color(0xFF3F152E),
+  Color(0xFF132E22),
+];
+
+/// タイトルの安定ハッシュ(FNV-1a)。
+/// String.hashCodeは実行ごとに変わり得るので使わない。
+int _titleHash(String s) {
+  var h = 0x811c9dc5;
+  for (final c in s.codeUnits) {
+    h ^= c;
+    h = (h * 0x01000193) & 0xffffffff;
+  }
+  return h;
+}
+
+/// 作品のタイル色の番号: (話数 + タイトルのハッシュ) % パレット数。
+/// 話数を足すため、同じドラマでも隣り合う話は必ず別の色になる。
+int tileIndexFor(Work w) => ((w.episode ?? 0) + _titleHash(w.title)) % kTilePalette.length;
+
 /// アプリ全体のデータ。どの画面からも同じものを見る
 class AppData {
   AppData._();
@@ -660,46 +702,100 @@ class _ShelfPageState extends State<ShelfPage> {
   }
 
   Widget _workCard(Work w) {
+    final tileIdx = tileIndexFor(w);
     return Card(
       color: kCard,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
         onTap: () => _openWork(w),
-        child: Padding(
-          padding: const EdgeInsets.all(8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Icon(Icons.movie, size: 28, color: kSub),
-              const SizedBox(height: 4),
-              if (w.episode != null)
-                Text('第${w.episode}話', style: const TextStyle(color: kEpisode, fontWeight: FontWeight.bold, fontSize: 12)),
-              // タイトルは残りの高さに収める(2行まで、入りきらなければ省略記号)。
-              // 固定要素の合計よりセルが低い場合でも、はみ出しエラーにしないための防御。
-              Expanded(
-                child: Text(w.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
-              ),
-              Text(fmtSize(w.fileSizeBytes), style: const TextStyle(color: kSub, fontSize: 12)),
-              if (w.watched) const Text('観た', style: TextStyle(color: kWatched, fontSize: 12)),
-              if (w.isInProgress) ...[
-                const SizedBox(height: 3),
-                const Text('▶ つづき', style: TextStyle(color: kContinue, fontWeight: FontWeight.bold, fontSize: 12)),
-                const SizedBox(height: 2),
-                SizedBox(
-                  height: 4,
-                  child: LinearProgressIndicator(
-                    value: w.durationSeconds > 0 ? w.positionSeconds / w.durationSeconds : 0,
-                    color: kContinue,
-                    backgroundColor: kContinueBg,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // 色付きポスター風タイル(Web版の棚と同じ見た目)。
+            // 高さはExpandedで残り全部を受けるので、セルより高くなることはない。
+            // タイトルは白・太字で中央、左上に話数バッジ、右下に再生マーク。
+            Expanded(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [kTilePalette[tileIdx], kTilePaletteDark[tileIdx]],
                   ),
                 ),
-                const SizedBox(height: 2),
-                // 詳細(経過/残り)は狭いセルで何行にも折り返すと縦に溢れるので1行に制限する
-                Text('つづき ${fmtTime(w.positionSeconds)} / ${fmtTime(w.durationSeconds)}・残り約${fmtTime(w.durationSeconds - w.positionSeconds)}',
-                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kSub, fontSize: 10)),
-              ],
-            ],
-          ),
+                child: Stack(
+                  children: [
+                    Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        child: Text(
+                          w.title,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13, height: 1.25),
+                        ),
+                      ),
+                    ),
+                    if (w.episode != null)
+                      Positioned(
+                        left: 6,
+                        top: 6,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(color: const Color(0x73000000), borderRadius: BorderRadius.circular(8)),
+                          child: Text('第${w.episode}話', style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    Positioned(
+                      right: 6,
+                      bottom: 6,
+                      child: Container(
+                        width: 26,
+                        height: 26,
+                        decoration: const BoxDecoration(color: Color(0x73000000), shape: BoxShape.circle),
+                        child: const Icon(Icons.play_arrow, color: Colors.white, size: 16),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            // タイルの下の情報エリア。どのカードでも同じ高さ(76)にそろえ、
+            // ポスターの高さがカードごとに揃うようにする。
+            // 中身の最大量(サイズ+つづき一式で約62)より広く取ってあり、
+            // 残りの高さはタイル側が受けるので、縦はみ出しは起きない。
+            SizedBox(
+              height: 76,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(8, 5, 8, 5),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(fmtSize(w.fileSizeBytes), style: const TextStyle(color: kSub, fontSize: 12)),
+                    if (w.watched) const Text('観た', style: TextStyle(color: kWatched, fontSize: 12)),
+                    if (w.isInProgress) ...[
+                      const SizedBox(height: 3),
+                      const Text('▶ つづき', style: TextStyle(color: kContinue, fontWeight: FontWeight.bold, fontSize: 12)),
+                      const SizedBox(height: 2),
+                      SizedBox(
+                        height: 4,
+                        child: LinearProgressIndicator(
+                          value: w.durationSeconds > 0 ? w.positionSeconds / w.durationSeconds : 0,
+                          color: kContinue,
+                          backgroundColor: kContinueBg,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      // 詳細(経過/残り)は狭いセルで何行にも折り返すと縦に溢れるので1行に制限する
+                      Text('つづき ${fmtTime(w.positionSeconds)} / ${fmtTime(w.durationSeconds)}・残り約${fmtTime(w.durationSeconds - w.positionSeconds)}',
+                          maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kSub, fontSize: 10)),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -797,8 +893,8 @@ class _ShelfPageState extends State<ShelfPage> {
                         padding: const EdgeInsets.all(12),
                         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: MediaQuery.of(context).size.width > 900 ? 5 : (MediaQuery.of(context).size.width > 600 ? 4 : 3),
-                          // カード内(アイコン+話数+題名2行+サイズ+つづき一式)が収まるよう、
-                          // 以前(0.72)よりセルを縦長にする。題名はExpandedで残り高さに収める。
+                          // カード内(色タイル+下の情報エリア76)が収まるよう、
+                          // 以前(0.72)よりセルを縦長にする。タイルはExpandedで残り高さに収める。
                           childAspectRatio: 0.60,
                           crossAxisSpacing: 10,
                           mainAxisSpacing: 10,
