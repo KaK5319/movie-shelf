@@ -666,28 +666,37 @@ class _ShelfPageState extends State<ShelfPage> {
       child: InkWell(
         onTap: () => _openWork(w),
         child: Padding(
-          padding: const EdgeInsets.all(10),
+          padding: const EdgeInsets.all(8),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Icon(Icons.movie, size: 40, color: kSub),
-              const SizedBox(height: 6),
+              const Icon(Icons.movie, size: 28, color: kSub),
+              const SizedBox(height: 4),
               if (w.episode != null)
-                Text('第${w.episode}話', style: const TextStyle(color: kEpisode, fontWeight: FontWeight.bold)),
-              Text(w.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
+                Text('第${w.episode}話', style: const TextStyle(color: kEpisode, fontWeight: FontWeight.bold, fontSize: 12)),
+              // タイトルは残りの高さに収める(2行まで、入りきらなければ省略記号)。
+              // 固定要素の合計よりセルが低い場合でも、はみ出しエラーにしないための防御。
+              Expanded(
+                child: Text(w.title, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
+              ),
               Text(fmtSize(w.fileSizeBytes), style: const TextStyle(color: kSub, fontSize: 12)),
               if (w.watched) const Text('観た', style: TextStyle(color: kWatched, fontSize: 12)),
               if (w.isInProgress) ...[
-                const SizedBox(height: 4),
-                const Text('▶ つづき', style: TextStyle(color: kContinue, fontWeight: FontWeight.bold, fontSize: 13)),
+                const SizedBox(height: 3),
+                const Text('▶ つづき', style: TextStyle(color: kContinue, fontWeight: FontWeight.bold, fontSize: 12)),
                 const SizedBox(height: 2),
-                LinearProgressIndicator(
-                  value: w.durationSeconds > 0 ? w.positionSeconds / w.durationSeconds : 0,
-                  color: kContinue,
-                  backgroundColor: kContinueBg,
+                SizedBox(
+                  height: 4,
+                  child: LinearProgressIndicator(
+                    value: w.durationSeconds > 0 ? w.positionSeconds / w.durationSeconds : 0,
+                    color: kContinue,
+                    backgroundColor: kContinueBg,
+                  ),
                 ),
+                const SizedBox(height: 2),
+                // 詳細(経過/残り)は狭いセルで何行にも折り返すと縦に溢れるので1行に制限する
                 Text('つづき ${fmtTime(w.positionSeconds)} / ${fmtTime(w.durationSeconds)}・残り約${fmtTime(w.durationSeconds - w.positionSeconds)}',
-                    style: const TextStyle(color: kSub, fontSize: 11)),
+                    maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kSub, fontSize: 10)),
               ],
             ],
           ),
@@ -702,11 +711,17 @@ class _ShelfPageState extends State<ShelfPage> {
     final cont = AppData.I.continueWork(widget.shelfId);
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.shelfName),
+        // 棚名が長くても「並び替え」ボタンを押し出さないよう、タイトルは1行で省略する
+        title: Text(widget.shelfName, maxLines: 1, overflow: TextOverflow.ellipsis),
         actions: [
           if (list.length > 1)
             TextButton(
-              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              style: TextButton.styleFrom(
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: const Size(0, 36),
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
               onPressed: () => setState(() => _reorder = !_reorder),
               child: Text(_reorder ? '完了' : '並び替え'),
             ),
@@ -716,22 +731,36 @@ class _ShelfPageState extends State<ShelfPage> {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-            child: Row(
+            // 1行に全部並べると狭い画面で右にはみ出すため、Wrapで収まらない分を2行目へ流す
+            child: Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Text('全${list.length}本', style: const TextStyle(color: kSub)),
-                if (cont != null) ...[
-                  const SizedBox(width: 12),
+                if (cont != null)
                   FilledButton.tonal(
-                    style: FilledButton.styleFrom(foregroundColor: kContinue, backgroundColor: kContinueBg),
+                    style: FilledButton.styleFrom(
+                      foregroundColor: kContinue,
+                      backgroundColor: kContinueBg,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
                     onPressed: () => _openWork(cont),
                     child: Text('▶ つづき${cont.episode != null ? ':第${cont.episode}話' : ''}'),
                   ),
-                ],
-                const Spacer(),
                 if (!_reorder) ...[
-                  OutlinedButton.icon(onPressed: _addBulk, icon: const Icon(Icons.library_add, size: 18), label: const Text('まとめて追加')),
-                  const SizedBox(width: 8),
-                  FilledButton.icon(onPressed: _addSingle, icon: const Icon(Icons.add, size: 18), label: const Text('追加')),
+                  OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                    onPressed: _addBulk,
+                    icon: const Icon(Icons.library_add, size: 18),
+                    label: const Text('まとめて追加'),
+                  ),
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                    onPressed: _addSingle,
+                    icon: const Icon(Icons.add, size: 18),
+                    label: const Text('追加'),
+                  ),
                 ],
               ],
             ),
@@ -768,7 +797,9 @@ class _ShelfPageState extends State<ShelfPage> {
                         padding: const EdgeInsets.all(12),
                         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: MediaQuery.of(context).size.width > 900 ? 5 : (MediaQuery.of(context).size.width > 600 ? 4 : 3),
-                          childAspectRatio: 0.72,
+                          // カード内(アイコン+話数+題名2行+サイズ+つづき一式)が収まるよう、
+                          // 以前(0.72)よりセルを縦長にする。題名はExpandedで残り高さに収める。
+                          childAspectRatio: 0.60,
                           crossAxisSpacing: 10,
                           mainAxisSpacing: 10,
                         ),
