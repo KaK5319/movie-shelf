@@ -1412,18 +1412,19 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   Widget build(BuildContext context) {
     final hasPoster = w.posterPath != null && w.posterPath!.isNotEmpty;
-    return Scaffold(
-      appBar: AppBar(title: Text(w.title, maxLines: 1, overflow: TextOverflow.ellipsis)),
-      body: ListView(
-        children: [
-          AspectRatio(
+
+    // 動画エリア。コントロールは media_kit 標準のまま触らない。
+    final videoArea = AspectRatio(
             aspectRatio: 16 / 9,
             child: _fileMissing ? const ColoredBox(color: Colors.black) : Video(controller: _controller),
-          ),
-          if (_error != null)
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: Card(
+    );
+
+    // 再生エラー表示(無い時は null)。
+    final Widget? errorCard = _error == null
+        ? null
+        : Padding(
+            padding: const EdgeInsets.all(14),
+            child: Card(
                 color: kContinueBg,
                 child: Padding(
                   padding: const EdgeInsets.all(12),
@@ -1439,8 +1440,10 @@ class _PlayerPageState extends State<PlayerPage> {
                   ),
                 ),
               ),
-            ),
-          Padding(
+            );
+
+    // 情報エリア(ポスター・タイトル・つづき・操作ボタン)。
+    final infoArea = Padding(
             padding: const EdgeInsets.all(14),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1493,8 +1496,46 @@ class _PlayerPageState extends State<PlayerPage> {
                 ),
               ],
             ),
-          ),
-        ],
+    );
+
+    return Scaffold(
+      appBar: AppBar(title: Text(w.title, maxLines: 1, overflow: TextOverflow.ellipsis)),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // 広い画面(タブレット横向き等)では左右2ペインにする。
+          // media_kit 標準コントロールは動画全面に縦・横ドラッグの判定を
+          // 持っていて、動画の上から引っ張ってもページ側のスクロールが
+          // 始まらない(固く感じる)ため、情報側を独立したスクロール領域に
+          // 分け、動画をまたがなくても情報へたどり着けるようにする。
+          // 狭い画面(スマホ)では従来通り1列のリスト表示のまま。
+          if (constraints.maxWidth >= 700) {
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(flex: 62, child: videoArea),
+                Expanded(
+                  flex: 38,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (errorCard != null) errorCard,
+                        infoArea,
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            );
+          }
+          return ListView(
+            children: [
+              videoArea,
+              if (errorCard != null) errorCard,
+              infoArea,
+            ],
+          );
+        },
       ),
     );
   }
