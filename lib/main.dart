@@ -1099,6 +1099,219 @@ class _ShelfPageState extends State<ShelfPage> {
 
 // ---------- 詳細・再生 ----------
 
+// ---------- 動画の自前コントロール ----------
+// media_kit 標準の Material コントロールは動画全面に縦・横ドラッグの
+// GestureDetector を敷いていて、動画の上から引っ張ってもページ側の
+// スクロールが始まらない(当たり判定が厳しく感じる)。そこで操作系だけを
+// 自前に差し替え、ドラッグ判定はシークスライダー(横)だけに限定する。
+// 全画面表示は標準と同じ toggleFullscreen を使う(media_kit_video が
+// エクスポートする関数)。全画面側でも同じ controls ビルダーで再表示
+// されるので、全画面でもこのコントロールがそのまま効き、終了ボタンも
+// 動く。
+
+/// Video の controls に渡すビルダー(同一性を保つため最上位関数にする)。
+Widget eigadanaVideoControls(VideoState state) => _EigadanaVideoControls(state: state);
+
+class _EigadanaVideoControls extends StatefulWidget {
+  const _EigadanaVideoControls({required this.state});
+  final VideoState state;
+  @override
+  State<_EigadanaVideoControls> createState() => _EigadanaVideoControlsState();
+}
+
+class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
+  Player get _player => widget.state.widget.controller.player;
+
+  final List<StreamSubscription> _subs = [];
+  bool _visible = true;
+  bool _playing = false;
+  bool _buffering = false;
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+  double? _dragSeconds; // シークバーを掴んでいる間の表示位置(秒)
+  Timer? _hideTimer;
+  bool _depsReady = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final p = _player;
+    _playing = p.state.playing;
+    _buffering = p.state.buffering;
+    _position = p.state.position;
+    _duration = p.state.duration;
+    _subs.add(p.stream.playing.listen((v) {
+      if (!mounted) return;
+      setState(() => _playing = v);
+      if (v) {
+        _restartHideTimer();
+      } else {
+        _hideTimer?.cancel();
+      }
+    }));
+    _subs.add(p.stream.buffering.listen((v) {
+      if (mounted) setState(() => _buffering = v);
+    }));
+    _subs.add(p.stream.position.listen((v) {
+      if (mounted) setState(() => _position = v);
+    }));
+    _subs.add(p.stream.duration.listen((v) {
+      if (mounted) setState(() => _duration = v);
+    }));
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_depsReady) {
+      _depsReady = true;
+      // 全画面では標準コントロールと同じく最初は隠しておく(タップで出る)。
+      if (isFullscreen(context)) _visible = false;
+      _restartHideTimer();
+    }
+  }
+
+  @override
+  void dispose() {
+    _hideTimer?.cancel();
+    for (final s in _subs) {
+      s.cancel();
+    }
+    super.dispose();
+  }
+
+  /// 再生中だけ、3秒後にコントロールを隠す(標準コントロールと同じ間隔)。
+  void _restartHideTimer() {
+    _hideTimer?.cancel();
+    if (!_visible || !_playing) return;
+    _hideTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _visible = false);
+    });
+  }
+
+  void _onTapVideo() {
+    if (_visible) {
+      _hideTimer?.cancel();
+      setState(() => _visible = false);
+    } else {
+      setState(() => _visible = true);
+      _restartHideTimer();
+    }
+  }
+
+  void _togglePlay() {
+    _player.playOrPause();
+    if (!_visible) setState(() => _visible = true);
+    _restartHideTimer();
+  }
+
+  void _onSeekChanged(double v) {
+    _hideTimer?.cancel();
+    setState(() => _dragSeconds = v);
+  }
+
+  void _onSeekEnd(double v) {
+    _player.seek(Duration(seconds: v.round()));
+    setState(() {
+      _dragSeconds = null;
+      _position = Duration(seconds: v.round());
+    });
+    _restartHideTimer();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final fullscreen = isFullscreen(context);
+    final maxSec = _duration.inSeconds.toDouble();
+    final shownSec = (_dragSeconds ?? _position.inSeconds.toDouble()).clamp(0.0, maxSec > 0 ? maxSec : 0.0).toDouble();
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        // タップだけを受ける層。onTap 以外のドラッグ判定を持たないので、
+        // 指が縦に動けば親(ListView)のスクロールがそのまま始まる。
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _onTapVideo,
+          child: const SizedBox.expand(),
+        ),
+        if (_buffering)
+          const IgnorePointer(
+            child: Center(child: CircularProgressIndicator(color: Colors.white)),
+          ),
+        // 隠れている間はボタン類に触れないようにし、タップは下の層に通す。
+        IgnorePointer(
+          ignoring: !_visible,
+          child: AnimatedOpacity(
+            opacity: _visible ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 200),
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (!_buffering)
+                  Center(
+                    child: Material(
+                      color: Colors.black45,
+                      shape: const CircleBorder(),
+                      child: IconButton(
+                        iconSize: 56,
+                        color: Colors.white,
+                        icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
+                        onPressed: _togglePlay,
+                      ),
+                    ),
+                  ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    color: Colors.black54,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          color: Colors.white,
+                          icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
+                          onPressed: _togglePlay,
+                        ),
+                        Text(fmtTime(_position.inSeconds), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                        Expanded(
+                          child: SliderTheme(
+                            data: SliderTheme.of(context).copyWith(
+                              activeTrackColor: Colors.white,
+                              inactiveTrackColor: Colors.white24,
+                              thumbColor: Colors.white,
+                              overlayColor: Colors.white24,
+                              trackHeight: 2.5,
+                              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                            ),
+                            child: Slider(
+                              value: shownSec,
+                              max: maxSec > 0 ? maxSec : 1.0,
+                              onChanged: maxSec > 0 ? _onSeekChanged : null,
+                              onChangeEnd: maxSec > 0 ? _onSeekEnd : null,
+                            ),
+                          ),
+                        ),
+                        Text(fmtTime(_duration.inSeconds), style: const TextStyle(color: Colors.white, fontSize: 12)),
+                        IconButton(
+                          color: Colors.white,
+                          icon: Icon(fullscreen ? Icons.fullscreen_exit : Icons.fullscreen),
+                          onPressed: () => toggleFullscreen(context),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class PlayerPage extends StatefulWidget {
   const PlayerPage({super.key, required this.work});
   final Work work;
@@ -1115,6 +1328,9 @@ class _PlayerPageState extends State<PlayerPage> {
   bool _finished = false;
   String? _error;
   bool _fileMissing = false;
+  // エラー表示後に「再生が実際に進んだ」ことを判定するための基準位置(秒)。
+  // エラーが出た直後は -1 になり、再生中の位置がこれを超えたらエラー表示を消す。
+  int _errBasePos = -1;
 
   // 表示中の作品。開いた時点のものを持ち続けるのではなく、編集のたびに
   // AppData(保存データ)側の最新の同じ作品へ取り直して、詳細画面の表示が
@@ -1150,7 +1366,12 @@ class _PlayerPageState extends State<PlayerPage> {
       return;
     }
     _subs.add(_player.stream.error.listen((e) {
-      if (mounted && e.isNotEmpty) setState(() => _error = e);
+      if (mounted && e.isNotEmpty) {
+        setState(() {
+          _error = e;
+          _errBasePos = -1; // 新しいエラー: 進み判定の基準を取り直す
+        });
+      }
     }));
     _subs.add(_player.stream.duration.listen((d) {
       if (d.inSeconds > 0) {
@@ -1163,6 +1384,17 @@ class _PlayerPageState extends State<PlayerPage> {
     }));
     _subs.add(_player.stream.position.listen((p) {
       w.positionSeconds = p.inSeconds;
+      // 音声デコード等、再生自体は続く致命的でないエラーが表示されっぱなしに
+      // ならないよう、再生中で位置が前に進んだらエラー表示を消す。
+      // 本当に開けないファイルは位置が進まないので、表示はそのまま残る。
+      if (_error != null && !_fileMissing && _player.state.playing) {
+        if (_errBasePos >= 0 && p.inSeconds > _errBasePos) {
+          _errBasePos = -1;
+          if (mounted) setState(() => _error = null);
+        } else if (_errBasePos < 0) {
+          _errBasePos = p.inSeconds;
+        }
+      }
       if (!_finished && w.durationSeconds > 0 && w.isAtEnd) {
         _finished = true;
         _markWatched();
@@ -1204,6 +1436,7 @@ class _PlayerPageState extends State<PlayerPage> {
     // 再生し直す
     setState(() {
       _error = null;
+      _errBasePos = -1;
       _fileMissing = false;
       _seeked = false;
       _finished = w.watched;
@@ -1413,10 +1646,12 @@ class _PlayerPageState extends State<PlayerPage> {
   Widget build(BuildContext context) {
     final hasPoster = w.posterPath != null && w.posterPath!.isNotEmpty;
 
-    // 動画エリア。コントロールは media_kit 標準のまま触らない。
+    // 動画エリア。コントロールは自前(eigadanaVideoControls)に差し替え済み。
+    // 標準コントロールと違い動画全面のドラッグ判定が無いので、狭い画面でも
+    // 動画の上からページをスクロールできる。
     final videoArea = AspectRatio(
             aspectRatio: 16 / 9,
-            child: _fileMissing ? const ColoredBox(color: Colors.black) : Video(controller: _controller),
+            child: _fileMissing ? const ColoredBox(color: Colors.black) : Video(controller: _controller, controls: eigadanaVideoControls),
     );
 
     // 再生エラー表示(無い時は null)。
@@ -1503,10 +1738,9 @@ class _PlayerPageState extends State<PlayerPage> {
       body: LayoutBuilder(
         builder: (context, constraints) {
           // 広い画面(タブレット横向き等)では左右2ペインにする。
-          // media_kit 標準コントロールは動画全面に縦・横ドラッグの判定を
-          // 持っていて、動画の上から引っ張ってもページ側のスクロールが
-          // 始まらない(固く感じる)ため、情報側を独立したスクロール領域に
-          // 分け、動画をまたがなくても情報へたどり着けるようにする。
+          // 情報側を独立したスクロール領域に分け、動画をまたがなくても
+          // 情報へたどり着けるようにする(動画上のスクロール自体も自前
+          // コントロール化で可能になったが、この見た目は維持する)。
           // 狭い画面(スマホ)では従来通り1列のリスト表示のまま。
           if (constraints.maxWidth >= 700) {
             return Row(
