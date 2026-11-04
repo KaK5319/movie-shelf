@@ -455,25 +455,11 @@ Widget posterPickerSection({required String? previewPath, required VoidCallback 
       const Align(alignment: Alignment.centerLeft, child: Text('ポスター', style: TextStyle(color: kSub))),
       const SizedBox(height: 6),
       if (hasPath) ...[
-        ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: SizedBox(
-            height: 120,
-            width: double.infinity,
-            child: Image.file(
-              File(previewPath!),
-              height: 120,
-              width: double.infinity,
-              fit: BoxFit.cover,
-              cacheWidth: 800,
-              frameBuilder: (ctx, child, frame, wasSynchronouslyLoaded) {
-                if (wasSynchronouslyLoaded || frame != null) return child;
-                return posterMessageBox('読み込み中…');
-              },
-              errorBuilder: (_, __, ___) => posterMessageBox('この画像は表示できませんでした', icon: Icons.broken_image),
-            ),
-          ),
-        ),
+        // プレビュー画像はダイアログの初回ビルドには含めない(_PosterPreview)。
+        // 初回ビルドは文字と箱だけの静的コンテンツにし、画像は最初のフレームが
+        // 描かれてから差し込む。画像の読み込みで初回ビルドが止まって
+        // 「バリアだけ出てダイアログが出ない」状態になるのを防ぐため。
+        _PosterPreview(path: previewPath!),
         const SizedBox(height: 4),
         // 画像が出ない場合でも、どのファイルが設定されているかは文字で必ず分かるようにする
         Text(
@@ -488,6 +474,56 @@ Widget posterPickerSection({required String? previewPath, required VoidCallback 
       if (onRemove != null) TextButton.icon(onPressed: onRemove, icon: const Icon(Icons.close), label: const Text('ポスターを外す')),
     ],
   );
+}
+
+/// 編集ダイアログ内のポスタープレビュー。
+/// 最初のフレームでは画像を出さず、文言箱だけを出す。画像(Image.file)は
+/// ダイアログの最初のフレームが描画された後(postFrameCallback)で初めて
+/// ツリーに入れる。これにより、ダイアログの初回ビルドは画像の読み込み
+/// 状態に一切左右されず、必ず静的コンテンツが即座に描かれる。
+/// 万が一画像側で問題が起きても、影響はこの120dpの枠の中だけに閉じる。
+class _PosterPreview extends StatefulWidget {
+  const _PosterPreview({required this.path});
+  final String path;
+  @override
+  State<_PosterPreview> createState() => _PosterPreviewState();
+}
+
+class _PosterPreviewState extends State<_PosterPreview> {
+  bool _showImage = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _showImage = true);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: SizedBox(
+        height: 120,
+        width: double.infinity,
+        child: _showImage
+            ? Image.file(
+                File(widget.path),
+                height: 120,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                cacheWidth: 800,
+                frameBuilder: (ctx, child, frame, wasSynchronouslyLoaded) {
+                  if (wasSynchronouslyLoaded || frame != null) return child;
+                  return posterMessageBox('読み込み中…');
+                },
+                errorBuilder: (_, __, ___) => posterMessageBox('この画像は表示できませんでした', icon: Icons.broken_image),
+              )
+            : posterMessageBox('読み込み中…'),
+      ),
+    );
+  }
 }
 
 // ---------- ホーム(棚の箱一覧) ----------
@@ -1365,6 +1401,9 @@ class _PlayerPageState extends State<PlayerPage> {
     var watched = w.watched;
     var shelfId = w.shelfId;
     var posterRemoved = false; // 「ポスターを外す」を押したかどうか(反映はダイアログを閉じた後)
+    // ダイアログのビルダーは、開く時点で固定した値だけを読むようにする
+    // (ビルド中に保存データ側のオブジェクトへ読みに行かない)。
+    final initialPosterPath = w.posterPath;
     // ポスター画像はダイアログを開いたまま選ばない。以前の作り(ピッカーを待って
     // ダイアログ内で setState)では、ピッカーから戻った時にダイアログの中身が
     // 空っぽになる問題が直らなかった。そのため「ポスター画像を選ぶ」は、今の
@@ -1434,11 +1473,11 @@ class _PlayerPageState extends State<PlayerPage> {
                 TextField(controller: memoCtl, decoration: const InputDecoration(labelText: 'メモ'), maxLines: 2),
                 posterPickerSection(
                   // プレビューに出すのは保存済み(アプリ内にコピー済み)のポスターだけ。
-                  previewPath: posterRemoved ? null : w.posterPath,
+                  previewPath: posterRemoved ? null : initialPosterPath,
                   // 選ぶボタンはこの場で選ばず、ダイアログを 'pick' で閉じるだけ。
                   // 実際の画像選択はダイアログが閉じた後、ページ側で行う。
                   onPick: () => Navigator.pop(ctx, 'pick'),
-                  onRemove: posterRemoved || w.posterPath == null ? null : () => setLocal(() => posterRemoved = true),
+                  onRemove: posterRemoved || initialPosterPath == null ? null : () => setLocal(() => posterRemoved = true),
                 ),
                 const SizedBox(height: 4),
                 const Text('「ポスター画像を選ぶ」または「ポスターを入れ替える」を押すと、今の内容を保存してこの画面は一度閉じ、画像を選ぶ画面が出ます。選び終わると、この画面が開き直します。',
