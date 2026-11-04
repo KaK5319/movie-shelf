@@ -349,11 +349,15 @@ Future<String?> copyPosterForWork(String sourcePath, String workId) async {
     if (!posterExtensions.contains(ext)) ext = 'jpg';
     final target = File('${postersDir.path}/$workId.$ext');
     if (src.path != target.path) await src.copy(target.path);
+    // 同じパスに新しい画像が入ったので、そのパスの画像キャッシュを捨てる
+    // (捨てないと差し替え前の古い画像が出続けてしまう)。
+    evictPosterImageCache(target.path);
     // 同じ作品の別拡張子の古いポスターを消す
     await for (final e in postersDir.list()) {
       if (e is File && e.path != target.path && e.path.split('/').last.startsWith('$workId.')) {
         try {
           await e.delete();
+          evictPosterImageCache(e.path);
         } catch (_) {}
       }
     }
@@ -369,7 +373,44 @@ Future<void> deletePosterFile(String? posterPath) async {
   try {
     final f = File(posterPath);
     if (await f.exists()) await f.delete();
+    evictPosterImageCache(posterPath);
   } catch (_) {}
+}
+
+/// ポスター画像を表示する各所で使っている表示サイズ(cacheWidth)。
+/// カード=400、編集ダイアログのプレビュー=800、詳細画面=1000。
+const posterCacheWidths = [400, 800, 1000];
+
+/// そのパスの画像キャッシュを捨てる。
+/// Flutterの画像キャッシュはファイルの「パス」で管理されるため、
+/// 同じパスの中身を差し替えても、捨てない限り古い画像が出続ける
+/// (差し替えが画面に反映されない・遅れて見える原因になる)。
+/// パスそのものの分と、表示サイズ違い(ResizeImage)の分を両方捨てる。
+void evictPosterImageCache(String? path) {
+  if (path == null || path.isEmpty) return;
+  try {
+    final cache = PaintingBinding.instance.imageCache;
+    final base = FileImage(File(path));
+    cache.evict(base);
+    for (final wpx in posterCacheWidths) {
+      cache.evict(ResizeImage(base, width: wpx));
+    }
+  } catch (_) {}
+}
+
+/// ポスターを表示サイズごとに先にデコードしてキャッシュへ入れておく。
+/// 選んだ画像は大きいことが多く、表示する画面で初めてデコードすると
+/// その分だけポスターの表示が遅れる。コピー直後にここで読み込んで
+/// おくことで、戻った画面(カード・詳細・開き直した編集画面)で
+/// ポスターがすぐ出るようにする。失敗しても表示側の
+/// フォールバック(色タイル・文言箱)に任せる。
+Future<void> precachePosterSizes(BuildContext context, String path) async {
+  final base = FileImage(File(path));
+  for (final wpx in posterCacheWidths) {
+    try {
+      await precacheImage(ResizeImage(base, width: wpx), context);
+    } catch (_) {}
+  }
 }
 
 /// ポスターのプレビュー枠に必ず何か出すための箱。
@@ -396,7 +437,9 @@ Widget posterMessageBox(String message, {IconData icon = Icons.image}) {
 
 /// 編集ダイアログ内のポスター欄。
 /// プレビューに出すのは保存済み(アプリ内にコピー済み)のポスターだけ。
-/// 「ポスター画像を選ぶ」(onPick)はこの場で画像を選ばず、ダイアログを
+/// ポスター未設定なら「ポスター画像を選ぶ」、設定済みならプレビューと
+/// ファイル名に加えて「ポスターを入れ替える」ボタンを出す(どちらも
+/// onPick)。そのボタンはこの場で画像を選ばず、ダイアログを
 /// 閉じる合図として使う。実際の選択はダイアログが閉じた後にページ側で行い、
 /// 終わったらダイアログを開き直す(ピッカー表示中にダイアログが残らない作り。
 /// 以前はダイアログを開いたまま選ぶとピッカーから戻った時に中身が
@@ -441,7 +484,7 @@ Widget posterPickerSection({required String? previewPath, required VoidCallback 
         ),
         const SizedBox(height: 6),
       ],
-      OutlinedButton.icon(onPressed: onPick, icon: const Icon(Icons.image), label: const Text('ポスター画像を選ぶ')),
+      OutlinedButton.icon(onPressed: onPick, icon: const Icon(Icons.image), label: Text(hasPath ? 'ポスターを入れ替える' : 'ポスター画像を選ぶ')),
       if (onRemove != null) TextButton.icon(onPressed: onRemove, icon: const Icon(Icons.close), label: const Text('ポスターを外す')),
     ],
   );
@@ -821,6 +864,8 @@ class _ShelfPageState extends State<ShelfPage> {
         if (copied != null) {
           work.posterPath = copied;
           await AppData.I.save();
+          // 表示サイズで先読みしておき、棚のカードでポスターがすぐ出るようにする
+          if (mounted) await precachePosterSizes(context, copied);
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ポスターを付けました')));
             setState(() {});
@@ -1156,11 +1201,26 @@ class _PlayerPageState extends State<PlayerPage> {
   String? _error;
   bool _fileMissing = false;
 
-  Work get w => widget.work;
+  // 表示中の作品。開いた時点のものを持ち続けるのではなく、編集のたびに
+  // AppData(保存データ)側の最新の同じ作品へ取り直して、詳細画面の表示が
+  // 古いままにならないようにする(_refreshWorkFromStore)。
+  late Work _work;
+  Work get w => _work;
+
+  /// AppData側にある同じ作品を取り直す。
+  void _refreshWorkFromStore() {
+    for (final x in AppData.I.works) {
+      if (x.id == _work.id) {
+        _work = x;
+        return;
+      }
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _work = widget.work;
     _player = Player();
     _controller = VideoController(_player);
     _initPlayer();
@@ -1324,7 +1384,7 @@ class _PlayerPageState extends State<PlayerPage> {
                   onRemove: posterRemoved || w.posterPath == null ? null : () => setLocal(() => posterRemoved = true),
                 ),
                 const SizedBox(height: 4),
-                const Text('「ポスター画像を選ぶ」を押すと、今の内容を保存してこの画面は一度閉じ、画像を選ぶ画面が出ます。選び終わると、この画面が開き直します。',
+                const Text('「ポスター画像を選ぶ」または「ポスターを入れ替える」を押すと、今の内容を保存してこの画面は一度閉じ、画像を選ぶ画面が出ます。選び終わると、この画面が開き直します。',
                     style: TextStyle(color: kSub, fontSize: 11)),
               ],
             ),
@@ -1354,6 +1414,7 @@ class _PlayerPageState extends State<PlayerPage> {
       w.sortOrder = AppData.I.nextSortOrder(shelfId);
     }
     await AppData.I.save();
+    _refreshWorkFromStore(); // 詳細画面が保存データ側の最新の作品で描き直されるようにする
     if (mounted) setState(() {});
     if (result == 'pick') {
       // ダイアログが無い状態で画像を選ぶ。デコード確認などの重い処理は一切せず、
@@ -1367,12 +1428,17 @@ class _PlayerPageState extends State<PlayerPage> {
         p = null;
       }
       if (p != null) {
+        final hadPoster = w.posterPath != null; // 差し替えかどうか(完了メッセージ用)
         final copied = await copyPosterForWork(p, w.id);
         if (copied != null) {
           w.posterPath = copied;
           await AppData.I.save();
+          _refreshWorkFromStore();
+          // 表示サイズで先読みしておき、詳細画面・カード・開き直した編集画面で
+          // ポスターがデコード待ちにならず、すぐ出るようにする。
+          if (mounted) await precachePosterSizes(context, copied);
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ポスターを付けました')));
+            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(hadPoster ? 'ポスターを入れ替えました' : 'ポスターを付けました')));
             setState(() {});
           }
         } else if (mounted) {
