@@ -1271,6 +1271,11 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
                       children: [
                         IconButton(
                           color: Colors.white,
+                          icon: Icon(fullscreen ? Icons.fullscreen_exit : Icons.fullscreen),
+                          onPressed: () => toggleFullscreen(context),
+                        ),
+                        IconButton(
+                          color: Colors.white,
                           icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
                           onPressed: _togglePlay,
                         ),
@@ -1294,11 +1299,6 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
                           ),
                         ),
                         Text(fmtTime(_duration.inSeconds), style: const TextStyle(color: Colors.white, fontSize: 12)),
-                        IconButton(
-                          color: Colors.white,
-                          icon: Icon(fullscreen ? Icons.fullscreen_exit : Icons.fullscreen),
-                          onPressed: () => toggleFullscreen(context),
-                        ),
                       ],
                     ),
                   ),
