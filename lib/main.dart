@@ -864,8 +864,8 @@ class _ShelfPageState extends State<ShelfPage> {
         if (copied != null) {
           work.posterPath = copied;
           await AppData.I.save();
-          // 表示サイズで先読みしておき、棚のカードでポスターがすぐ出るようにする
-          if (mounted) await precachePosterSizes(context, copied);
+          // 表示サイズの先読みは裏で流すだけにして、ここでは待たない
+          if (mounted) unawaited(precachePosterSizes(context, copied));
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ポスターを付けました')));
             setState(() {});
@@ -1300,6 +1300,63 @@ class _PlayerPageState extends State<PlayerPage> {
     }
   }
 
+  /// 詳細画面から直接ポスターを追加・入れ替える。
+  /// ダイアログは介さず、このページからピッカーを開く(「ファイルを選び直す」と
+  /// 同じ形で、このページ起点の選択はこのアプリで確実に動く)。
+  /// 選んだらその場でコピーと保存まで済ませるので、別途「保存」を押す
+  /// 必要はない。やめた場合は何も変えず、失敗したら今のポスターのままにして
+  /// 理由を出す。
+  Future<void> _pickPoster() async {
+    final hadPoster = w.posterPath != null && w.posterPath!.isNotEmpty;
+    String? p;
+    try {
+      p = await pickPosterImagePath();
+    } catch (_) {
+      p = null;
+    }
+    if (p == null) return; // やめた場合は何も変えない
+    final copied = await copyPosterForWork(p, w.id);
+    if (copied == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(hadPoster ? 'ポスターを保存できませんでした。今のポスターのままです' : 'ポスターを保存できませんでした')));
+      }
+      return;
+    }
+    w.posterPath = copied;
+    await AppData.I.save(); // その場で保存まで確定させる(ダイアログの「保存」には頼らない)
+    _refreshWorkFromStore();
+    if (!mounted) return;
+    // 先読みは裏で流すだけにして待たない(待つと処理が止まる原因になる)。
+    // 失敗しても表示側のフォールバック(色タイル・文言箱)に任せる。
+    unawaited(precachePosterSizes(context, copied));
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(hadPoster ? 'ポスターを入れ替えました' : 'ポスターを追加しました')));
+  }
+
+  /// 詳細画面からポスターを外す。「棚から外す」と同じく確認を挟む。
+  /// コピー済みファイルも消し、その場で保存する。
+  Future<void> _removePoster() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        content: const Text('ポスターを外しますか？\nアプリ内にコピーしたポスター画像が消えます。動画ファイルは消えません。'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('やめる')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('外す')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    final old = w.posterPath;
+    w.posterPath = null;
+    await deletePosterFile(old); // コピー済みファイルを消す(画像キャッシュも捨てられる)
+    await AppData.I.save();
+    _refreshWorkFromStore();
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ポスターを外しました')));
+  }
+
   Future<void> _edit() async {
     final titleCtl = TextEditingController(text: w.title);
     final epCtl = TextEditingController(text: w.episode?.toString() ?? '');
@@ -1434,9 +1491,10 @@ class _PlayerPageState extends State<PlayerPage> {
           w.posterPath = copied;
           await AppData.I.save();
           _refreshWorkFromStore();
-          // 表示サイズで先読みしておき、詳細画面・カード・開き直した編集画面で
-          // ポスターがデコード待ちにならず、すぐ出るようにする。
-          if (mounted) await precachePosterSizes(context, copied);
+          // 表示サイズの先読みは裏で流すだけにして、ここでは待たない。
+          // 先読み(大きな画像のデコード)を await で挟むと、その分だけ
+          // この一連の処理が止まり、開き直すダイアログも出てこなくなる。
+          if (mounted) unawaited(precachePosterSizes(context, copied));
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(hadPoster ? 'ポスターを入れ替えました' : 'ポスターを付けました')));
             setState(() {});
@@ -1483,6 +1541,7 @@ class _PlayerPageState extends State<PlayerPage> {
 
   @override
   Widget build(BuildContext context) {
+    final hasPoster = w.posterPath != null && w.posterPath!.isNotEmpty;
     return Scaffold(
       appBar: AppBar(title: Text(w.title, maxLines: 1, overflow: TextOverflow.ellipsis)),
       body: ListView(
@@ -1552,6 +1611,13 @@ class _PlayerPageState extends State<PlayerPage> {
                     if (!_fileMissing && _error == null)
                       OutlinedButton.icon(onPressed: _repick, icon: const Icon(Icons.folder_open), label: const Text('ファイルを選び直す')),
                     OutlinedButton.icon(onPressed: _edit, icon: const Icon(Icons.edit), label: const Text('直す')),
+                    // ポスターは詳細画面から直接扱えるようにする(ダイアログを介さない)。
+                    // 選んだらその場で保存される(_pickPoster / _removePoster)。
+                    if (hasPoster) ...[
+                      OutlinedButton.icon(onPressed: _pickPoster, icon: const Icon(Icons.image), label: const Text('ポスターを入れ替える')),
+                      OutlinedButton.icon(onPressed: _removePoster, icon: const Icon(Icons.close), label: const Text('ポスターを外す')),
+                    ] else
+                      OutlinedButton.icon(onPressed: _pickPoster, icon: const Icon(Icons.image), label: const Text('ポスターを追加')),
                     OutlinedButton.icon(onPressed: _delete, icon: const Icon(Icons.delete), label: const Text('棚から外す')),
                   ],
                 ),
