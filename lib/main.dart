@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -328,6 +329,24 @@ Future<String?> pickPosterImagePath() async {
   return r?.files.single.path;
 }
 
+/// 選んだ画像が実際に読み込める(デコードできる)か確かめる。
+/// ファイルピッカーは拡張子だけで判定するため、拡張子はjpgでも中身が
+/// 別形式・壊れている画像が混ざることがある。読めない画像はここで弾く。
+Future<bool> isDecodableImage(String path) async {
+  try {
+    final f = File(path);
+    if (!await f.exists() || await f.length() == 0) return false;
+    final bytes = await f.readAsBytes();
+    final codec = await ui.instantiateImageCodec(bytes, targetWidth: 800);
+    final frame = await codec.getNextFrame();
+    frame.image.dispose();
+    codec.dispose();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// 選んだポスター画像をアプリ内(posters/<作品ID>.<拡張子>)にコピーし、そのパスを返す。
 /// 先に新しい方をコピーしてから、別拡張子の古いポスターを消す(差し替え対応)。
 /// 失敗したらnull(呼び出し側は今のポスターのままにする)。
@@ -365,30 +384,68 @@ Future<void> deletePosterFile(String? posterPath) async {
   } catch (_) {}
 }
 
+/// ポスターのプレビュー枠に必ず何か出すための箱。
+/// 読み込み中・表示できない場合でも、空っぽのクリーム色にはしない。
+Widget posterMessageBox(String message, {IconData icon = Icons.image}) {
+  return Container(
+    height: 120,
+    width: double.infinity,
+    color: kContinueBg,
+    alignment: Alignment.center,
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: kSub, size: 28),
+        const SizedBox(height: 6),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: Text(message, textAlign: TextAlign.center, style: const TextStyle(color: kSub, fontSize: 12)),
+        ),
+      ],
+    ),
+  );
+}
+
 /// 編集・追加ダイアログ内のポスター欄。
 /// ボタンは縦並び(横幅いっぱい)にして、横はみ出しが起きないようにする。
-Widget posterPickerSection({required String? previewPath, required VoidCallback onPick, required VoidCallback? onRemove}) {
-  final showPreview = previewPath != null && previewPath.isNotEmpty && File(previewPath).existsSync();
+/// プレビューは高さ120で固定し、読み込み中・失敗時も必ず文言を出す
+/// (以前は失敗時に SizedBox.shrink() で何も出ず、空の画面に見えた)。
+Widget posterPickerSection({required String? previewPath, required VoidCallback onPick, required VoidCallback? onRemove, String? errorText}) {
+  final hasPath = previewPath != null && previewPath.isNotEmpty;
   return Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       const SizedBox(height: 10),
       const Align(alignment: Alignment.centerLeft, child: Text('ポスター', style: TextStyle(color: kSub))),
       const SizedBox(height: 6),
-      if (showPreview) ...[
+      if (hasPath) ...[
         ClipRRect(
           borderRadius: BorderRadius.circular(8),
-          child: Image.file(
-            File(previewPath!),
+          child: SizedBox(
             height: 120,
             width: double.infinity,
-            fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            child: Image.file(
+              File(previewPath!),
+              height: 120,
+              width: double.infinity,
+              fit: BoxFit.cover,
+              cacheWidth: 800,
+              frameBuilder: (ctx, child, frame, wasSynchronouslyLoaded) {
+                if (wasSynchronouslyLoaded || frame != null) return child;
+                return posterMessageBox('読み込み中…');
+              },
+              errorBuilder: (_, __, ___) => posterMessageBox('この画像は表示できませんでした', icon: Icons.broken_image),
+            ),
           ),
         ),
         const SizedBox(height: 6),
       ],
       OutlinedButton.icon(onPressed: onPick, icon: const Icon(Icons.image), label: const Text('ポスター画像を選ぶ')),
+      if (errorText != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(errorText, style: const TextStyle(color: kContinue, fontSize: 12)),
+        ),
       if (onRemove != null) TextButton.icon(onPressed: onRemove, icon: const Icon(Icons.close), label: const Text('ポスターを外す')),
     ],
   );
@@ -719,6 +776,7 @@ class _ShelfPageState extends State<ShelfPage> {
     final titleCtl = TextEditingController(text: f.name.replaceAll(RegExp(r'\.[^.]+$'), ''));
     final epCtl = TextEditingController();
     String? pickedPoster; // 選んだポスター画像の元のパス(「加える」時にアプリ内へコピーする)
+    String? posterError; // ポスターで失敗した時にダイアログ内に出す文言
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -733,14 +791,39 @@ class _ShelfPageState extends State<ShelfPage> {
                 TextField(controller: epCtl, decoration: const InputDecoration(labelText: '話数(空でも可)'), keyboardType: TextInputType.number),
                 posterPickerSection(
                   previewPath: pickedPoster,
+                  errorText: posterError,
                   onPick: () async {
-                    final p = await pickPosterImagePath();
-                    if (p == null) return;
+                    String? p;
                     try {
-                      setLocal(() => pickedPoster = p);
+                      p = await pickPosterImagePath();
+                    } catch (_) {
+                      try {
+                        setLocal(() => posterError = '画像を選べませんでした。もう一度試してください');
+                      } catch (_) {}
+                      return;
+                    }
+                    if (p == null) return;
+                    // 拡張子だけでは中身が読めるか分からないので、先に読み込み確認する。
+                    // 読めない画像は受け付けず、理由をダイアログ内に出す(無言で空にしない)。
+                    if (!await isDecodableImage(p)) {
+                      try {
+                        setLocal(() => posterError = 'この画像は使えませんでした。別の画像(jpg・png・webp)を選んでください');
+                      } catch (_) {}
+                      return;
+                    }
+                    try {
+                      setLocal(() {
+                        pickedPoster = p;
+                        posterError = null;
+                      });
                     } catch (_) {}
                   },
-                  onRemove: pickedPoster == null ? null : () => setLocal(() => pickedPoster = null),
+                  onRemove: pickedPoster == null
+                      ? null
+                      : () => setLocal(() {
+                            pickedPoster = null;
+                            posterError = null;
+                          }),
                 ),
               ],
             ),
@@ -754,11 +837,16 @@ class _ShelfPageState extends State<ShelfPage> {
     );
     if (ok != true) return;
     final work = _workFromFile(f, titleCtl.text.trim().isEmpty ? f.name : titleCtl.text.trim(), int.tryParse(epCtl.text));
+    var posterFailed = false;
     if (pickedPoster != null) {
       work.posterPath = await copyPosterForWork(pickedPoster!, work.id);
+      posterFailed = work.posterPath == null;
     }
     AppData.I.works.add(work);
     await AppData.I.save();
+    if (posterFailed && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ポスターを保存できませんでした。作品はポスターなしで追加しました')));
+    }
     setState(() {});
   }
 
@@ -837,6 +925,7 @@ class _ShelfPageState extends State<ShelfPage> {
                     Image.file(
                       File(w.posterPath!),
                       fit: BoxFit.cover,
+                      cacheWidth: 400,
                       // 読めなかったら色タイルの地だけ出す(下の題名帯と合わせて表示する)
                       errorBuilder: (_, __, ___) => Container(
                         decoration: BoxDecoration(
@@ -1179,6 +1268,7 @@ class _PlayerPageState extends State<PlayerPage> {
     var posterPreview = w.posterPath; // プレビューに出す画像(既存ポスター or 新しく選んだ画像)
     String? pickedPoster; // 新しく選んだ画像の元のパス(保存時にアプリ内へコピーする)
     var posterRemoved = false;
+    String? posterError; // ポスターで失敗した時にダイアログ内に出す文言
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -1243,14 +1333,32 @@ class _PlayerPageState extends State<PlayerPage> {
                 TextField(controller: memoCtl, decoration: const InputDecoration(labelText: 'メモ'), maxLines: 2),
                 posterPickerSection(
                   previewPath: posterPreview,
+                  errorText: posterError,
                   onPick: () async {
-                    final p = await pickPosterImagePath();
+                    String? p;
+                    try {
+                      p = await pickPosterImagePath();
+                    } catch (_) {
+                      try {
+                        setLocal(() => posterError = '画像を選べませんでした。もう一度試してください');
+                      } catch (_) {}
+                      return;
+                    }
                     if (p == null) return;
+                    // 拡張子だけでは中身が読めるか分からないので、先に読み込み確認する。
+                    // 読めない画像は受け付けず、理由をダイアログ内に出す(無言で空にしない)。
+                    if (!await isDecodableImage(p)) {
+                      try {
+                        setLocal(() => posterError = 'この画像は使えませんでした。別の画像(jpg・png・webp)を選んでください');
+                      } catch (_) {}
+                      return;
+                    }
                     try {
                       setLocal(() {
                         pickedPoster = p;
                         posterPreview = p;
                         posterRemoved = false;
+                        posterError = null;
                       });
                     } catch (_) {}
                   },
@@ -1260,6 +1368,7 @@ class _PlayerPageState extends State<PlayerPage> {
                             pickedPoster = null;
                             posterPreview = null;
                             posterRemoved = true;
+                            posterError = null;
                           }),
                 ),
               ],
@@ -1274,10 +1383,16 @@ class _PlayerPageState extends State<PlayerPage> {
     );
     if (ok != true) return;
     // ポスター: 新しく選んだ画像はアプリ内にコピーしてからパスを差し替える。
-    // 外した場合はコピー済みファイルも消す。コピーに失敗したら今のポスターのまま。
+    // 外した場合はコピー済みファイルも消す。コピーに失敗したら今のポスターのままにし、
+    // そのことを必ず知らせる(以前は失敗しても無言だった)。
+    var posterFailed = false;
     if (pickedPoster != null) {
       final copied = await copyPosterForWork(pickedPoster!, w.id);
-      if (copied != null) w.posterPath = copied;
+      if (copied != null) {
+        w.posterPath = copied;
+      } else {
+        posterFailed = true;
+      }
     } else if (posterRemoved) {
       await deletePosterFile(w.posterPath);
       w.posterPath = null;
@@ -1293,6 +1408,9 @@ class _PlayerPageState extends State<PlayerPage> {
       w.sortOrder = AppData.I.nextSortOrder(shelfId);
     }
     await AppData.I.save();
+    if (posterFailed && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ポスターを保存できませんでした。今のポスターのままです')));
+    }
     if (mounted) setState(() {});
   }
 
@@ -1366,6 +1484,7 @@ class _PlayerPageState extends State<PlayerPage> {
                     child: Image.file(
                       File(w.posterPath!),
                       height: 200,
+                      cacheWidth: 1000,
                       width: double.infinity,
                       fit: BoxFit.cover,
                       errorBuilder: (_, __, ___) => const SizedBox.shrink(),
