@@ -435,97 +435,6 @@ Widget posterMessageBox(String message, {IconData icon = Icons.image}) {
   );
 }
 
-/// 編集ダイアログ内のポスター欄。
-/// プレビューに出すのは保存済み(アプリ内にコピー済み)のポスターだけ。
-/// ポスター未設定なら「ポスター画像を選ぶ」、設定済みならプレビューと
-/// ファイル名に加えて「ポスターを入れ替える」ボタンを出す(どちらも
-/// onPick)。そのボタンはこの場で画像を選ばず、ダイアログを
-/// 閉じる合図として使う。実際の選択はダイアログが閉じた後にページ側で行い、
-/// 終わったらダイアログを開き直す(ピッカー表示中にダイアログが残らない作り。
-/// 以前はダイアログを開いたまま選ぶとピッカーから戻った時に中身が
-/// 空っぽになる問題があり、この形に作り直した)。
-/// ボタンは縦並び(横幅いっぱい)にして、横はみ出しが起きないようにする。
-/// プレビューは高さ120で固定し、読み込み中・失敗時も必ず文言を出す。
-Widget posterPickerSection({required String? previewPath, required VoidCallback onPick, required VoidCallback? onRemove}) {
-  final hasPath = previewPath != null && previewPath.isNotEmpty;
-  return Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      const SizedBox(height: 10),
-      const Align(alignment: Alignment.centerLeft, child: Text('ポスター', style: TextStyle(color: kSub))),
-      const SizedBox(height: 6),
-      if (hasPath) ...[
-        // プレビュー画像はダイアログの初回ビルドには含めない(_PosterPreview)。
-        // 初回ビルドは文字と箱だけの静的コンテンツにし、画像は最初のフレームが
-        // 描かれてから差し込む。画像の読み込みで初回ビルドが止まって
-        // 「バリアだけ出てダイアログが出ない」状態になるのを防ぐため。
-        _PosterPreview(path: previewPath!),
-        const SizedBox(height: 4),
-        // 画像が出ない場合でも、どのファイルが設定されているかは文字で必ず分かるようにする
-        Text(
-          previewPath!.split('/').last,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: kSub, fontSize: 11),
-        ),
-        const SizedBox(height: 6),
-      ],
-      OutlinedButton.icon(onPressed: onPick, icon: const Icon(Icons.image), label: Text(hasPath ? 'ポスターを入れ替える' : 'ポスター画像を選ぶ')),
-      if (onRemove != null) TextButton.icon(onPressed: onRemove, icon: const Icon(Icons.close), label: const Text('ポスターを外す')),
-    ],
-  );
-}
-
-/// 編集ダイアログ内のポスタープレビュー。
-/// 最初のフレームでは画像を出さず、文言箱だけを出す。画像(Image.file)は
-/// ダイアログの最初のフレームが描画された後(postFrameCallback)で初めて
-/// ツリーに入れる。これにより、ダイアログの初回ビルドは画像の読み込み
-/// 状態に一切左右されず、必ず静的コンテンツが即座に描かれる。
-/// 万が一画像側で問題が起きても、影響はこの120dpの枠の中だけに閉じる。
-class _PosterPreview extends StatefulWidget {
-  const _PosterPreview({required this.path});
-  final String path;
-  @override
-  State<_PosterPreview> createState() => _PosterPreviewState();
-}
-
-class _PosterPreviewState extends State<_PosterPreview> {
-  bool _showImage = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) setState(() => _showImage = true);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: SizedBox(
-        height: 120,
-        width: double.infinity,
-        child: _showImage
-            ? Image.file(
-                File(widget.path),
-                height: 120,
-                width: double.infinity,
-                fit: BoxFit.cover,
-                cacheWidth: 800,
-                frameBuilder: (ctx, child, frame, wasSynchronouslyLoaded) {
-                  if (wasSynchronouslyLoaded || frame != null) return child;
-                  return posterMessageBox('読み込み中…');
-                },
-                errorBuilder: (_, __, ___) => posterMessageBox('この画像は表示できませんでした', icon: Icons.broken_image),
-              )
-            : posterMessageBox('読み込み中…'),
-      ),
-    );
-  }
-}
-
 // ---------- ホーム(棚の箱一覧) ----------
 
 class HomePage extends StatefulWidget {
@@ -850,10 +759,10 @@ class _ShelfPageState extends State<ShelfPage> {
     if (f == null) return;
     final titleCtl = TextEditingController(text: f.name.replaceAll(RegExp(r'\.[^.]+$'), ''));
     final epCtl = TextEditingController();
-    // ポスターはダイアログを開いたまま選ばない。以前の作りでは、ピッカーから
-    // 戻った時にダイアログの中身が空っぽになる問題があったため、「ポスター画像も
-    // 選ぶ」はまずダイアログを閉じて作品を追加し、続けてページ側で画像を選ぶ。
-    final result = await showDialog<String>(
+    // ポスターはこのダイアログでは扱わない(詳細画面のボタンに一本化した)。
+    // ダイアログ内のポスター欄は、ポスター設定済みの作品でダイアログの
+    // 中身が描かれなくなる問題の発生源だったため撤去した。
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('作品を加える'),
@@ -866,51 +775,21 @@ class _ShelfPageState extends State<ShelfPage> {
               TextField(controller: titleCtl, decoration: const InputDecoration(labelText: 'タイトル')),
               TextField(controller: epCtl, decoration: const InputDecoration(labelText: '話数(空でも可)'), keyboardType: TextInputType.number),
               const SizedBox(height: 10),
-              const Align(alignment: Alignment.centerLeft, child: Text('ポスター', style: TextStyle(color: kSub))),
-              const SizedBox(height: 6),
-              OutlinedButton.icon(onPressed: () => Navigator.pop(ctx, 'pick'), icon: const Icon(Icons.image), label: const Text('ポスター画像も選ぶ')),
-              const SizedBox(height: 4),
-              const Text('「ポスター画像も選ぶ」を押すと、この画面は一度閉じて作品を追加し、続けて画像を選ぶ画面が出ます。', style: TextStyle(color: kSub, fontSize: 11)),
+              const Text('ポスターは、追加したあと詳細画面から付けられます', style: TextStyle(color: kSub, fontSize: 11)),
             ],
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('やめる')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, 'add'), child: const Text('加える')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('やめる')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('加える')),
         ],
       ),
     );
-    if (result != 'add' && result != 'pick') return;
+    if (ok != true) return;
     final work = _workFromFile(f, titleCtl.text.trim().isEmpty ? f.name : titleCtl.text.trim(), int.tryParse(epCtl.text));
     AppData.I.works.add(work);
     await AppData.I.save();
     if (mounted) setState(() {});
-    if (result == 'pick') {
-      // ダイアログが無い状態で画像を選ぶ。デコード確認などの重い処理はせず、
-      // 選ばれたファイルをアプリ内へコピーするだけにする。表示できるかは
-      // カード側のプレビューが文言付きで示す(読めなければ色タイルに戻る)。
-      String? p;
-      try {
-        p = await pickPosterImagePath();
-      } catch (_) {
-        p = null;
-      }
-      if (p != null) {
-        final copied = await copyPosterForWork(p, work.id);
-        if (copied != null) {
-          work.posterPath = copied;
-          await AppData.I.save();
-          // 表示サイズの先読みは裏で流すだけにして、ここでは待たない
-          if (mounted) unawaited(precachePosterSizes(context, copied));
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ポスターを付けました')));
-            setState(() {});
-          }
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ポスターを保存できませんでした。作品はポスターなしで追加しました')));
-        }
-      }
-    }
   }
 
   Future<void> _addBulk() async {
@@ -1400,16 +1279,13 @@ class _PlayerPageState extends State<PlayerPage> {
     var rating = w.rating;
     var watched = w.watched;
     var shelfId = w.shelfId;
-    var posterRemoved = false; // 「ポスターを外す」を押したかどうか(反映はダイアログを閉じた後)
     // ダイアログのビルダーは、開く時点で固定した値だけを読むようにする
     // (ビルド中に保存データ側のオブジェクトへ読みに行かない)。
-    final initialPosterPath = w.posterPath;
-    // ポスター画像はダイアログを開いたまま選ばない。以前の作り(ピッカーを待って
-    // ダイアログ内で setState)では、ピッカーから戻った時にダイアログの中身が
-    // 空っぽになる問題が直らなかった。そのため「ポスター画像を選ぶ」は、今の
-    // 入力を保存してダイアログを 'pick' で閉じ、ページ側で画像を選んでから
-    // このダイアログを開き直す形にしている(下の result == 'pick' の処理)。
-    final result = await showDialog<String>(
+    // ポスターはこのダイアログでは扱わない(詳細画面のボタンに一本化した)。
+    // ダイアログ内のポスター欄は、ポスター設定済みの作品でダイアログの
+    // 中身が描かれなくなる問題の発生源だったため撤去した。そのため
+    // この保存処理は posterPath に一切触れない(現在の値がそのまま保たれる)。
+    final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setLocal) => AlertDialog(
@@ -1471,34 +1347,24 @@ class _PlayerPageState extends State<PlayerPage> {
                   onChanged: (v) => setLocal(() => watched = v),
                 ),
                 TextField(controller: memoCtl, decoration: const InputDecoration(labelText: 'メモ'), maxLines: 2),
-                posterPickerSection(
-                  // プレビューに出すのは保存済み(アプリ内にコピー済み)のポスターだけ。
-                  previewPath: posterRemoved ? null : initialPosterPath,
-                  // 選ぶボタンはこの場で選ばず、ダイアログを 'pick' で閉じるだけ。
-                  // 実際の画像選択はダイアログが閉じた後、ページ側で行う。
-                  onPick: () => Navigator.pop(ctx, 'pick'),
-                  onRemove: posterRemoved || initialPosterPath == null ? null : () => setLocal(() => posterRemoved = true),
+                const SizedBox(height: 10),
+                const Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('ポスターは、詳細画面のボタンから追加・入れ替えできます', style: TextStyle(color: kSub, fontSize: 11)),
                 ),
-                const SizedBox(height: 4),
-                const Text('「ポスター画像を選ぶ」または「ポスターを入れ替える」を押すと、今の内容を保存してこの画面は一度閉じ、画像を選ぶ画面が出ます。選び終わると、この画面が開き直します。',
-                    style: TextStyle(color: kSub, fontSize: 11)),
               ],
             ),
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(ctx, 'cancel'), child: const Text('やめる')),
-            FilledButton(onPressed: () => Navigator.pop(ctx, 'save'), child: const Text('保存')),
+            TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('やめる')),
+            FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
           ],
         ),
       ),
     );
-    if (result != 'save' && result != 'pick') return;
-    // まず今の入力内容を反映して保存する(「ポスター画像を選ぶ」で閉じた場合も同じ)。
-    // 外した場合はコピー済みファイルも消す。
-    if (posterRemoved) {
-      await deletePosterFile(w.posterPath);
-      w.posterPath = null;
-    }
+    if (ok != true) return;
+    // 入力内容を反映して保存する。w は保存データ側の同じオブジェクトなので、
+    // ここで触れていない posterPath 等は現在の値のまま保たれる。
     final shelfChanged = shelfId != w.shelfId;
     w.title = titleCtl.text.trim().isEmpty ? w.title : titleCtl.text.trim();
     w.episode = int.tryParse(epCtl.text);
@@ -1512,41 +1378,6 @@ class _PlayerPageState extends State<PlayerPage> {
     await AppData.I.save();
     _refreshWorkFromStore(); // 詳細画面が保存データ側の最新の作品で描き直されるようにする
     if (mounted) setState(() {});
-    if (result == 'pick') {
-      // ダイアログが無い状態で画像を選ぶ。デコード確認などの重い処理は一切せず、
-      // 選ばれたファイルをアプリ内へコピーするだけにする。表示できるかどうかは、
-      // 開き直したダイアログとカード側のプレビューが文言付きで示す
-      // (読めない画像でも色タイル等にフォールバックする)。
-      String? p;
-      try {
-        p = await pickPosterImagePath();
-      } catch (_) {
-        p = null;
-      }
-      if (p != null) {
-        final hadPoster = w.posterPath != null; // 差し替えかどうか(完了メッセージ用)
-        final copied = await copyPosterForWork(p, w.id);
-        if (copied != null) {
-          w.posterPath = copied;
-          await AppData.I.save();
-          _refreshWorkFromStore();
-          // 表示サイズの先読みは裏で流すだけにして、ここでは待たない。
-          // 先読み(大きな画像のデコード)を await で挟むと、その分だけ
-          // この一連の処理が止まり、開き直すダイアログも出てこなくなる。
-          if (mounted) unawaited(precachePosterSizes(context, copied));
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(hadPoster ? 'ポスターを入れ替えました' : 'ポスターを付けました')));
-            setState(() {});
-          }
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('ポスターを保存できませんでした。今のポスターのままです')));
-        }
-      }
-      // 選び終わったら(やめた場合も)「作品を直す」を開き直して結果を見せる。
-      // 開き直すダイアログは非同期処理が全部終わった後に新規に作られるので、
-      // ピッカー表示中の影響を受けない。
-      if (mounted) await _edit();
-    }
   }
 
   Future<void> _delete() async {
