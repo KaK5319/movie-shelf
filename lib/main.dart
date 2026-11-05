@@ -948,19 +948,21 @@ class _ShelfPageState extends State<ShelfPage> {
                 ],
               ),
             ),
-            // タイルの下の情報エリア。どのカードでも同じ高さ(88)にそろえ、
+            // タイルの下の情報エリア。どのカードでも同じ高さ(104)にそろえ、
             // ポスターの高さがカードごとに揃うようにする。
-            // 中身の最大量(サイズ+つづき一式)は実機で76だと1pxはみ出したため、
-            // 88まで広げ、内側の余白と間隔も少し詰めて余裕を持たせてある。
+            // 中身の最大量は「サイズ+つづき一式」(「観た」とつづきは同時に出ない)。
+            // 固定分は上下余白6+間隔(2+1+1)+バー4=14で、残りが文字3行分。
+            // 88の時はタブレットの文字メトリクスで中身が92相当になり4pxはみ出したため、
+            // 104まで広げ、観測された最悪ケースに対しても14の余裕を持たせた。
             // 残りの高さはタイル側が受けるので、縦はみ出しは起きない。
             SizedBox(
-              height: 88,
+              height: 104,
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+                padding: const EdgeInsets.fromLTRB(8, 3, 8, 3),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(fmtSize(w.fileSizeBytes), style: const TextStyle(color: kSub, fontSize: 12)),
+                    Text(fmtSize(w.fileSizeBytes), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: kSub, fontSize: 12)),
                     if (w.watched) const Text('観た', style: TextStyle(color: kWatched, fontSize: 12)),
                     if (w.isInProgress) ...[
                       const SizedBox(height: 2),
@@ -1081,9 +1083,11 @@ class _ShelfPageState extends State<ShelfPage> {
                         padding: const EdgeInsets.all(12),
                         gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                           crossAxisCount: MediaQuery.of(context).size.width > 900 ? 5 : (MediaQuery.of(context).size.width > 600 ? 4 : 3),
-                          // カード内(色タイル+下の情報エリア88)が収まるよう、
-                          // セルを縦長にする。タイルはExpandedで残り高さに収める。
-                          childAspectRatio: 0.55,
+                          // カード内(色タイル+下の情報エリア104)が収まるよう、
+                          // セルを縦長にする。0.55→0.52でセル高さが幅の約1割増え、
+                          // 情報エリアを広げた分だけタイルが痩せないようにしてある。
+                          // タイルはExpandedで残り高さに収める。
+                          childAspectRatio: 0.52,
                           crossAxisSpacing: 10,
                           mainAxisSpacing: 10,
                         ),
