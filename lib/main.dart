@@ -1108,35 +1108,55 @@ class _ShelfPageState extends State<ShelfPage> {
 // GestureDetector を敷いていて、動画の上から引っ張ってもページ側の
 // スクロールが始まらない(当たり判定が厳しく感じる)。そこで操作系だけを
 // 自前に差し替え、ドラッグ判定はシークスライダー(横)だけに限定する。
-// 全画面表示は標準と同じ toggleFullscreen を使う(media_kit_video が
-// エクスポートする関数)。全画面側でも同じ controls ビルダーで再表示
-// されるので、全画面でもこのコントロールがそのまま効き、終了ボタンも
-// 動く。
+// 全画面表示は標準ルートではなく自前のシェル(_FullscreenShell)にし、
+// 操作系はこのコントロールをシェル側でも兄弟オーバーレイとして共用する
+// (経緯と設計は _FullscreenShell のコメント参照)。
 
-/// 全画面表示の収め方(ページ側と全画面側のコントロールで共有する)。
-/// media_kit_video では、ページ側 Video と全画面側 Video が同じ
-/// VideoViewParameters の ValueNotifier を共有し、どちらもその中の fit で
-/// FittedBox を組み直す。VideoState.update(fit: ...) でその共有値を
-/// 書き換えると、全画面表示中でもその場で切り替えられる。
-/// - ページ内: 常に contain(今まで通り、黒枠あり)
-/// - 全画面: contain → ボタンでもう一度押すと cover(黒枠なし拡大)
-///   → もう一度押すと全画面を終了する(3段階を同じボタンで回す)
-/// 全画面を抜けたら必ず contain に戻す(終了操作と、全画面側コントロールの
-/// dispose で実施するので、戻るボタンで抜けても次回は contain から始まる)。
-final ValueNotifier<BoxFit> _eigadanaVideoFit = ValueNotifier<BoxFit>(BoxFit.contain);
+/// 詳細画面が開いている間、その画面の全画面シェルを開く処理が入る
+/// (登録と解除は PlayerPage が行う)。ページ内のコントロールの
+/// 全画面ボタンはこれを呼ぶ。
+VoidCallback? _eigadanaEnterFullscreen;
 
 /// Video の controls に渡すビルダー(同一性を保つため最上位関数にする)。
-Widget eigadanaVideoControls(VideoState state) => _EigadanaVideoControls(state: state);
+/// ページ内専用で、全画面ボタンはシェルを開く動作だけを行う。
+Widget eigadanaVideoControls(VideoState state) => _EigadanaVideoControls(
+      player: state.widget.controller.player,
+      fullscreenButtonIcon: Icons.fullscreen,
+      onFullscreenButtonPressed: () => _eigadanaEnterFullscreen?.call(),
+    );
 
+/// 自前コントロールの本体。ページ内と全画面シェルで共用し、見た目と
+/// 振る舞い(タップで表示/非表示、再生中は3秒で自動で隠れる、中央の
+/// 再生/停止、シーク、読み込み中表示)をそろえる。環境ごとの違いは
+/// パラメータで渡す:
+/// - 全画面ボタンの形と、押した時の動作
+/// - 起動直後に表示しておくか(全画面では標準と同じく最初は隠す)
+/// - 全画面ボタンを押した時に自動非表示タイマーを数え直すか
+///   (全画面側の段階切り替えで使う)
+/// - タップ層をすり抜けさせるか(全画面では下の InteractiveViewer へ
+///   ピンチやドラッグを渡す必要があるので、シェル側だけ translucent に
+///   して、タップ判定だけをここでも受ける)
 class _EigadanaVideoControls extends StatefulWidget {
-  const _EigadanaVideoControls({required this.state});
-  final VideoState state;
+  const _EigadanaVideoControls({
+    required this.player,
+    required this.fullscreenButtonIcon,
+    required this.onFullscreenButtonPressed,
+    this.initiallyVisible = true,
+    this.restartTimerOnFullscreenPress = false,
+    this.tapTranslucent = false,
+  });
+  final Player player;
+  final IconData fullscreenButtonIcon;
+  final VoidCallback onFullscreenButtonPressed;
+  final bool initiallyVisible;
+  final bool restartTimerOnFullscreenPress;
+  final bool tapTranslucent;
   @override
   State<_EigadanaVideoControls> createState() => _EigadanaVideoControlsState();
 }
 
 class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
-  Player get _player => widget.state.widget.controller.player;
+  Player get _player => widget.player;
 
   final List<StreamSubscription> _subs = [];
   bool _visible = true;
@@ -1146,14 +1166,11 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
   Duration _duration = Duration.zero;
   double? _dragSeconds; // シークバーを掴んでいる間の表示位置(秒)
   Timer? _hideTimer;
-  bool _depsReady = false;
-  bool _fsInstance = false; // このコントロールが全画面側のものかどうか
 
   @override
   void initState() {
     super.initState();
-    // 全画面の収め方(contain/cover)が変わったらボタンの形を切り替える。
-    _eigadanaVideoFit.addListener(_onFitChanged);
+    _visible = widget.initiallyVisible;
     final p = _player;
     _playing = p.state.playing;
     _buffering = p.state.buffering;
@@ -1177,18 +1194,7 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
     _subs.add(p.stream.duration.listen((v) {
       if (mounted) setState(() => _duration = v);
     }));
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (!_depsReady) {
-      _depsReady = true;
-      _fsInstance = isFullscreen(context);
-      // 全画面では標準コントロールと同じく最初は隠しておく(タップで出る)。
-      if (_fsInstance) _visible = false;
-      _restartHideTimer();
-    }
+    _restartHideTimer();
   }
 
   @override
@@ -1197,38 +1203,14 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
     for (final s in _subs) {
       s.cancel();
     }
-    _eigadanaVideoFit.removeListener(_onFitChanged);
-    if (_fsInstance) {
-      // 全画面がどの経路で終わっても(終了ボタン・端末の戻る等)、次に
-      // 全画面へ入る時は必ず contain から始めるよう、ここで戻しておく。
-      // update は共有パラメータを書き換えるだけで setState はしないので、
-      // dispose 中に呼んでも安全。
-      _eigadanaVideoFit.value = BoxFit.contain;
-      widget.state.update(fit: BoxFit.contain);
-    }
     super.dispose();
   }
 
-  void _onFitChanged() {
-    if (mounted) setState(() {});
-  }
-
-  /// 左端のボタンの3段階動作。
-  /// ページ内 → 全画面(contain) → 全画面(cover・黒枠なし) → 終了。
+  /// 左端のボタン。動作そのものは呼び出し側(ページ内=シェルを開く、
+  /// シェル側=段階切り替え)が決める。
   void _onFullscreenPressed() {
-    if (!isFullscreen(context)) {
-      toggleFullscreen(context);
-    } else if (_eigadanaVideoFit.value == BoxFit.contain) {
-      // 共有パラメータの fit を書き換えると、全画面の表示が即座に
-      // 黒枠なし拡大へ切り替わる(ページ側も同じ値を見るが裏に隠れている)。
-      _eigadanaVideoFit.value = BoxFit.cover;
-      widget.state.update(fit: BoxFit.cover);
-      _restartHideTimer();
-    } else {
-      _eigadanaVideoFit.value = BoxFit.contain;
-      widget.state.update(fit: BoxFit.contain);
-      toggleFullscreen(context);
-    }
+    widget.onFullscreenButtonPressed();
+    if (widget.restartTimerOnFullscreenPress) _restartHideTimer();
   }
 
   /// 再生中だけ、3秒後にコントロールを隠す(標準コントロールと同じ間隔)。
@@ -1272,16 +1254,18 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
 
   @override
   Widget build(BuildContext context) {
-    final fullscreen = isFullscreen(context);
     final maxSec = _duration.inSeconds.toDouble();
     final shownSec = (_dragSeconds ?? _position.inSeconds.toDouble()).clamp(0.0, maxSec > 0 ? maxSec : 0.0).toDouble();
     return Stack(
       fit: StackFit.expand,
       children: [
         // タップだけを受ける層。onTap 以外のドラッグ判定を持たないので、
-        // 指が縦に動けば親(ListView)のスクロールがそのまま始まる。
+        // 指が縦に動けば、ページ内では親(ListView)のスクロールが、
+        // 全画面では下の InteractiveViewer の移動・拡大がそのまま始まる
+        // (全画面では behavior を translucent にして、下の層にも
+        // ポインタが届くようにしてある)。
         GestureDetector(
-          behavior: HitTestBehavior.opaque,
+          behavior: widget.tapTranslucent ? HitTestBehavior.translucent : HitTestBehavior.opaque,
           onTap: _onTapVideo,
           child: const SizedBox.expand(),
         ),
@@ -1322,13 +1306,10 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
                       children: [
                         IconButton(
                           color: Colors.white,
-                          // 段階で形を変える: ページ内=全画面化、
-                          // 全画面(contain)=黒枠なし拡大、 全画面(cover)=終了。
-                          icon: Icon(!fullscreen
-                              ? Icons.fullscreen
-                              : _eigadanaVideoFit.value == BoxFit.contain
-                                  ? Icons.crop
-                                  : Icons.fullscreen_exit),
+                          // 形は呼び出し側が段階に応じて決める: ページ内=
+                          // 全画面化、全画面(contain)=黒枠なし拡大、
+                          // 全画面(cover)=終了。
+                          icon: Icon(widget.fullscreenButtonIcon),
                           onPressed: _onFullscreenPressed,
                         ),
                         IconButton(
@@ -1369,6 +1350,119 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
   }
 }
 
+// ---------- 全画面シェル ----------
+// 全画面は media_kit 標準のルートではなく自前のページにする。標準ルートは
+// Video を作り直してしまうためテクスチャを InteractiveViewer で包む余地が
+// なく、ピンチ拡大が付けられないため。ここでは:
+// - ページと同じ VideoController の Video(controls: null で内部に何の層も
+//   作らない)を InteractiveViewer で包み、ピンチで最大3倍まで自由に拡大、
+//   拡大中は1本指ドラッグで見たい所へ移動できる。1倍の時はドラッグ移動を
+//   無効にしてあるので、映像が不用意にずれることはない。
+// - 操作 UI(_EigadanaVideoControls)は包まずに兄弟として重ねるので、
+//   拡大・移動してもボタン類はそのままの大きさ・位置で使える。
+// - 画面回りの副作用は標準と同一にする: 進入側(PlayerPage)ではパッケージ
+//   公開の defaultEnterNativeFullscreen をそのまま呼び(没入モード+
+//   横向き固定)、終了側は標準と同じく WillPopScope 経由で
+//   defaultExitNativeFullscreen を呼んでから閉じる(手動モード+向き制限
+//   なしに復帰)。終了ボタンも端末の戻るもこの経路を通る。
+// - 左端ボタンの段階動作は今まで通り: contain(黒枠あり)で入り、もう一度
+//   押すと cover(黒枠なし・その際ピンチ拡大はリセット)、もう一度で終了。
+//   収め方と拡大はこのページ内だけの状態なので、閉じれば自然に初期状態へ
+//   戻り、次回も必ず contain・1倍から始まる。
+class _FullscreenShell extends StatefulWidget {
+  const _FullscreenShell({required this.controller});
+  final VideoController controller;
+  @override
+  State<_FullscreenShell> createState() => _FullscreenShellState();
+}
+
+class _FullscreenShellState extends State<_FullscreenShell> {
+  BoxFit _fit = BoxFit.contain;
+  final TransformationController _transform = TransformationController();
+  bool _panEnabled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _transform.addListener(_onTransformChanged);
+  }
+
+  @override
+  void dispose() {
+    _transform.removeListener(_onTransformChanged);
+    _transform.dispose();
+    super.dispose();
+  }
+
+  // 拡大している間だけドラッグ移動を有効にする(1倍では映像がずれない
+  // ようにするため。拡大率の変化に追随して切り替える)。
+  void _onTransformChanged() {
+    final p = _transform.value.getMaxScaleOnAxis() > 1.0;
+    if (p != _panEnabled && mounted) setState(() => _panEnabled = p);
+  }
+
+  /// 左端ボタン: contain → cover(黒枠なし) → 終了。
+  void _onStagePressed() {
+    if (_fit == BoxFit.contain) {
+      _transform.value = Matrix4.identity(); // 収め方を変える時は拡大を戻す
+      setState(() => _fit = BoxFit.cover);
+    } else {
+      // 画面の復帰は WillPopScope 側で行う(標準の終了と同じ経路)。
+      Navigator.of(context).maybePop();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return WillPopScope(
+      onWillPop: () async {
+        await defaultExitNativeFullscreen();
+        return true;
+      },
+      child: Material(
+        color: Colors.black,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            LayoutBuilder(
+              builder: (context, constraints) => InteractiveViewer(
+                transformationController: _transform,
+                minScale: 1.0,
+                maxScale: 3.0,
+                panEnabled: _panEnabled,
+                // 包む中身は表示領域と同寸にして、1倍で画面いっぱいに
+                // なるようにする(テクスチャの収め方は Video の fit 側)。
+                child: SizedBox(
+                  width: constraints.maxWidth,
+                  height: constraints.maxHeight,
+                  child: Video(
+                    controller: widget.controller,
+                    fit: _fit,
+                    // 操作は兄弟のオーバーレイに任せ、Video 内には
+                    // 判定層も含め何も置かない。
+                    controls: null,
+                    // 全画面側では wakelock を新たに取らない(標準の
+                    // 全画面と同じ。ページ側の Video が持ち続けている)。
+                    wakelock: false,
+                  ),
+                ),
+              ),
+            ),
+            _EigadanaVideoControls(
+              player: widget.controller.player,
+              fullscreenButtonIcon: _fit == BoxFit.contain ? Icons.crop : Icons.fullscreen_exit,
+              onFullscreenButtonPressed: _onStagePressed,
+              initiallyVisible: false,
+              restartTimerOnFullscreenPress: true,
+              tapTranslucent: true,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class PlayerPage extends StatefulWidget {
   const PlayerPage({super.key, required this.work});
   final Work work;
@@ -1381,6 +1475,7 @@ class _PlayerPageState extends State<PlayerPage> {
   late final VideoController _controller;
   final List<StreamSubscription> _subs = [];
   Timer? _saveTimer;
+  bool _fsPushing = false; // 全画面シェルを開く処理の二重実行防止
   bool _seeked = false;
   bool _finished = false;
   String? _error;
@@ -1408,12 +1503,31 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   void initState() {
     super.initState();
-    // 全画面の収め方は、詳細画面を開くたび contain から始める。
-    _eigadanaVideoFit.value = BoxFit.contain;
+    // ページ内のコントロールの全画面ボタンからシェルを開けるよう登録する。
+    _eigadanaEnterFullscreen = _openFullscreen;
     _work = widget.work;
     _player = Player();
     _controller = VideoController(_player);
     _initPlayer();
+  }
+
+  /// 自前の全画面シェルを開く(ピンチ拡大のため標準ルートは使わない)。
+  /// 画面回りの副作用は標準と同じにするため、パッケージ公開の
+  /// defaultEnterNativeFullscreen をそのまま呼ぶ(没入モード+横向き固定)。
+  /// 終了側の復帰はシェル内の WillPopScope が担う。
+  void _openFullscreen() {
+    if (!mounted || _fsPushing) return;
+    _fsPushing = true;
+    Navigator.of(context, rootNavigator: true)
+        .push(
+          PageRouteBuilder(
+            pageBuilder: (_, __, ___) => _FullscreenShell(controller: _controller),
+            transitionDuration: Duration.zero,
+            reverseTransitionDuration: Duration.zero,
+          ),
+        )
+        .then((_) => _fsPushing = false);
+    unawaited(defaultEnterNativeFullscreen());
   }
 
   Future<void> _initPlayer() async {
@@ -1692,6 +1806,9 @@ class _PlayerPageState extends State<PlayerPage> {
 
   @override
   void dispose() {
+    if (_eigadanaEnterFullscreen == _openFullscreen) {
+      _eigadanaEnterFullscreen = null;
+    }
     AppData.I.save();
     _saveTimer?.cancel();
     for (final s in _subs) {
