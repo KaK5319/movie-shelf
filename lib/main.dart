@@ -1109,6 +1109,18 @@ class _ShelfPageState extends State<ShelfPage> {
 // されるので、全画面でもこのコントロールがそのまま効き、終了ボタンも
 // 動く。
 
+/// 全画面表示の収め方(ページ側と全画面側のコントロールで共有する)。
+/// media_kit_video では、ページ側 Video と全画面側 Video が同じ
+/// VideoViewParameters の ValueNotifier を共有し、どちらもその中の fit で
+/// FittedBox を組み直す。VideoState.update(fit: ...) でその共有値を
+/// 書き換えると、全画面表示中でもその場で切り替えられる。
+/// - ページ内: 常に contain(今まで通り、黒枠あり)
+/// - 全画面: contain → ボタンでもう一度押すと cover(黒枠なし拡大)
+///   → もう一度押すと全画面を終了する(3段階を同じボタンで回す)
+/// 全画面を抜けたら必ず contain に戻す(終了操作と、全画面側コントロールの
+/// dispose で実施するので、戻るボタンで抜けても次回は contain から始まる)。
+final ValueNotifier<BoxFit> _eigadanaVideoFit = ValueNotifier<BoxFit>(BoxFit.contain);
+
 /// Video の controls に渡すビルダー(同一性を保つため最上位関数にする)。
 Widget eigadanaVideoControls(VideoState state) => _EigadanaVideoControls(state: state);
 
@@ -1131,10 +1143,13 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
   double? _dragSeconds; // シークバーを掴んでいる間の表示位置(秒)
   Timer? _hideTimer;
   bool _depsReady = false;
+  bool _fsInstance = false; // このコントロールが全画面側のものかどうか
 
   @override
   void initState() {
     super.initState();
+    // 全画面の収め方(contain/cover)が変わったらボタンの形を切り替える。
+    _eigadanaVideoFit.addListener(_onFitChanged);
     final p = _player;
     _playing = p.state.playing;
     _buffering = p.state.buffering;
@@ -1165,8 +1180,9 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
     super.didChangeDependencies();
     if (!_depsReady) {
       _depsReady = true;
+      _fsInstance = isFullscreen(context);
       // 全画面では標準コントロールと同じく最初は隠しておく(タップで出る)。
-      if (isFullscreen(context)) _visible = false;
+      if (_fsInstance) _visible = false;
       _restartHideTimer();
     }
   }
@@ -1177,7 +1193,38 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
     for (final s in _subs) {
       s.cancel();
     }
+    _eigadanaVideoFit.removeListener(_onFitChanged);
+    if (_fsInstance) {
+      // 全画面がどの経路で終わっても(終了ボタン・端末の戻る等)、次に
+      // 全画面へ入る時は必ず contain から始めるよう、ここで戻しておく。
+      // update は共有パラメータを書き換えるだけで setState はしないので、
+      // dispose 中に呼んでも安全。
+      _eigadanaVideoFit.value = BoxFit.contain;
+      widget.state.update(fit: BoxFit.contain);
+    }
     super.dispose();
+  }
+
+  void _onFitChanged() {
+    if (mounted) setState(() {});
+  }
+
+  /// 左端のボタンの3段階動作。
+  /// ページ内 → 全画面(contain) → 全画面(cover・黒枠なし) → 終了。
+  void _onFullscreenPressed() {
+    if (!isFullscreen(context)) {
+      toggleFullscreen(context);
+    } else if (_eigadanaVideoFit.value == BoxFit.contain) {
+      // 共有パラメータの fit を書き換えると、全画面の表示が即座に
+      // 黒枠なし拡大へ切り替わる(ページ側も同じ値を見るが裏に隠れている)。
+      _eigadanaVideoFit.value = BoxFit.cover;
+      widget.state.update(fit: BoxFit.cover);
+      _restartHideTimer();
+    } else {
+      _eigadanaVideoFit.value = BoxFit.contain;
+      widget.state.update(fit: BoxFit.contain);
+      toggleFullscreen(context);
+    }
   }
 
   /// 再生中だけ、3秒後にコントロールを隠す(標準コントロールと同じ間隔)。
@@ -1271,8 +1318,14 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
                       children: [
                         IconButton(
                           color: Colors.white,
-                          icon: Icon(fullscreen ? Icons.fullscreen_exit : Icons.fullscreen),
-                          onPressed: () => toggleFullscreen(context),
+                          // 段階で形を変える: ページ内=全画面化、
+                          // 全画面(contain)=黒枠なし拡大、 全画面(cover)=終了。
+                          icon: Icon(!fullscreen
+                              ? Icons.fullscreen
+                              : _eigadanaVideoFit.value == BoxFit.contain
+                                  ? Icons.crop
+                                  : Icons.fullscreen_exit),
+                          onPressed: _onFullscreenPressed,
                         ),
                         IconButton(
                           color: Colors.white,
@@ -1351,6 +1404,8 @@ class _PlayerPageState extends State<PlayerPage> {
   @override
   void initState() {
     super.initState();
+    // 全画面の収め方は、詳細画面を開くたび contain から始める。
+    _eigadanaVideoFit.value = BoxFit.contain;
     _work = widget.work;
     _player = Player();
     _controller = VideoController(_player);
