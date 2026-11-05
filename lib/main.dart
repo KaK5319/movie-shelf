@@ -1136,6 +1136,9 @@ Widget eigadanaVideoControls(VideoState state) => _EigadanaVideoControls(
 /// - タップ層をすり抜けさせるか(全画面では下の InteractiveViewer へ
 ///   ピンチやドラッグを渡す必要があるので、シェル側だけ translucent に
 ///   して、タップ判定だけをここでも受ける)
+/// - 左上の戻るボタンを出すか(全画面側だけ。渡された時だけ、詳細画面の
+///   AppBar と同じ左上に半透明の丸ボタンで出す。ページ内では渡さない
+///   ので何も出ない)
 class _EigadanaVideoControls extends StatefulWidget {
   const _EigadanaVideoControls({
     required this.player,
@@ -1144,6 +1147,7 @@ class _EigadanaVideoControls extends StatefulWidget {
     this.initiallyVisible = true,
     this.restartTimerOnFullscreenPress = false,
     this.tapTranslucent = false,
+    this.onBack,
   });
   final Player player;
   final IconData fullscreenButtonIcon;
@@ -1151,6 +1155,7 @@ class _EigadanaVideoControls extends StatefulWidget {
   final bool initiallyVisible;
   final bool restartTimerOnFullscreenPress;
   final bool tapTranslucent;
+  final VoidCallback? onBack;
   @override
   State<_EigadanaVideoControls> createState() => _EigadanaVideoControlsState();
 }
@@ -1295,6 +1300,31 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
                       ),
                     ),
                   ),
+                if (widget.onBack != null)
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    // 全画面だけに出す左上の戻る。詳細画面の AppBar と
+                    // 同じ場所に置き、中央ボタンと同じ半透明の丸背景で
+                    // 見た目をそろえる。ステータスバーやノッチと
+                    // ぶつからないよう SafeArea で内側に寄せる。
+                    // 表示/非表示とタップ可否は他のボタンと一緒
+                    // (外側の AnimatedOpacity と IgnorePointer に従う)。
+                    child: SafeArea(
+                      minimum: const EdgeInsets.all(4),
+                      child: Material(
+                        color: Colors.black45,
+                        shape: const CircleBorder(),
+                        child: IconButton(
+                          color: Colors.white,
+                          icon: const Icon(Icons.arrow_back),
+                          constraints: const BoxConstraints.tightFor(width: 44, height: 44),
+                          padding: EdgeInsets.zero,
+                          onPressed: widget.onBack,
+                        ),
+                      ),
+                    ),
+                  ),
                 Positioned(
                   left: 0,
                   right: 0,
@@ -1364,7 +1394,8 @@ class _EigadanaVideoControlsState extends State<_EigadanaVideoControls> {
 //   公開の defaultEnterNativeFullscreen をそのまま呼び(没入モード+
 //   横向き固定)、終了側は標準と同じく WillPopScope 経由で
 //   defaultExitNativeFullscreen を呼んでから閉じる(手動モード+向き制限
-//   なしに復帰)。終了ボタンも端末の戻るもこの経路を通る。
+//   なしに復帰)。終了ボタンも端末の戻るも左上の戻るボタンも、みんな
+//   maybePop でこの経路を通る。
 // - 左端ボタンの段階動作は今まで通り: contain(黒枠あり)で入り、もう一度
 //   押すと cover(黒枠なし・その際ピンチ拡大はリセット)、もう一度で終了。
 //   収め方と拡大はこのページ内だけの状態なので、閉じれば自然に初期状態へ
@@ -1412,6 +1443,12 @@ class _FullscreenShellState extends State<_FullscreenShell> {
     }
   }
 
+  /// 左上の戻るボタン: 段階ボタンの終了と同じ maybePop で閉じる
+  /// (復帰処理は WillPopScope 側に一本化してある)。
+  void _onBackPressed() {
+    Navigator.of(context).maybePop();
+  }
+
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
@@ -1455,6 +1492,7 @@ class _FullscreenShellState extends State<_FullscreenShell> {
               initiallyVisible: false,
               restartTimerOnFullscreenPress: true,
               tapTranslucent: true,
+              onBack: _onBackPressed,
             ),
           ],
         ),
