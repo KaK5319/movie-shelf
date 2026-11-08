@@ -81,6 +81,7 @@ class Work {
     this.watched = false,
     this.rating = 0,
     this.memo = '',
+    this.synopsis,
     this.posterPath,
     this.sortOrder = 0,
   });
@@ -96,6 +97,7 @@ class Work {
   bool watched;
   int rating; // 0-5
   String memo;
+  String? synopsis; // あらすじ(未入力ならnull)
   String? posterPath; // アプリ内にコピーしたポスター画像のパス(未設定ならnull)
   int sortOrder;
 
@@ -134,6 +136,7 @@ class Work {
         'watched': watched,
         'rating': rating,
         'memo': memo,
+        'synopsis': synopsis,
         'posterPath': posterPath,
         'sortOrder': sortOrder,
       };
@@ -150,6 +153,7 @@ class Work {
         watched: (j['watched'] ?? false) as bool,
         rating: (j['rating'] ?? 0) as int,
         memo: (j['memo'] ?? '') as String,
+        synopsis: j['synopsis'] as String?,
         posterPath: j['posterPath'] as String?,
         sortOrder: (j['sortOrder'] ?? 0) as int,
       );
@@ -1720,6 +1724,7 @@ class _PlayerPageState extends State<PlayerPage> {
     final titleCtl = TextEditingController(text: w.title);
     final epCtl = TextEditingController(text: w.episode?.toString() ?? '');
     final memoCtl = TextEditingController(text: w.memo);
+    final synopsisCtl = TextEditingController(text: w.synopsis ?? '');
     var rating = w.rating;
     var watched = w.watched;
     var shelfId = w.shelfId;
@@ -1791,6 +1796,7 @@ class _PlayerPageState extends State<PlayerPage> {
                   onChanged: (v) => setLocal(() => watched = v),
                 ),
                 TextField(controller: memoCtl, decoration: const InputDecoration(labelText: 'メモ'), maxLines: 2),
+                TextField(controller: synopsisCtl, decoration: const InputDecoration(labelText: 'あらすじ'), minLines: 3, maxLines: 6),
                 const SizedBox(height: 10),
                 const Align(
                   alignment: Alignment.centerLeft,
@@ -1813,6 +1819,7 @@ class _PlayerPageState extends State<PlayerPage> {
     w.title = titleCtl.text.trim().isEmpty ? w.title : titleCtl.text.trim();
     w.episode = int.tryParse(epCtl.text);
     w.memo = memoCtl.text;
+    w.synopsis = synopsisCtl.text.trim().isEmpty ? null : synopsisCtl.text;
     w.rating = rating;
     w.watched = watched;
     if (shelfChanged) {
@@ -1926,6 +1933,12 @@ class _PlayerPageState extends State<PlayerPage> {
                   Row(children: [for (var i = 1; i <= w.rating; i++) const Icon(Icons.star, color: kStar, size: 20)]),
                 if (w.watched) const Text('観た', style: TextStyle(color: kWatched)),
                 if (w.memo.isNotEmpty) Padding(padding: const EdgeInsets.only(top: 6), child: Text(w.memo)),
+                if (w.synopsis != null && w.synopsis!.trim().isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  const Text('あらすじ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: kInk)),
+                  const SizedBox(height: 4),
+                  Text(w.synopsis!),
+                ],
                 const SizedBox(height: 16),
                 Wrap(
                   spacing: 8,
