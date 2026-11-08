@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
   file_picker: ^8.1.2
   path_provider: ^2.1.4
   media_kit: ^1.1.11

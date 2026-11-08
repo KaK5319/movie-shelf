@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
@@ -36,6 +37,15 @@ class EigadanaApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
         title: '映画棚',
         debugShowCheckedModeBanner: false,
+        // フレームワーク標準の文言(コピー/貼り付け等のテキスト選択メニュー、
+        // ツールチップ等)を日本語にするためのロケール設定。
+        locale: const Locale('ja'),
+        supportedLocales: const [Locale('ja'), Locale('en')],
+        localizationsDelegates: const [
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+          GlobalCupertinoLocalizations.delegate,
+        ],
         theme: ThemeData(
           useMaterial3: true,
           brightness: Brightness.light,
